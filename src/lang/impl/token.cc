@@ -1,0 +1,96 @@
+#include "lang/impl/token.hh"
+
+namespace lang {
+const char* tokstr(Token t) {
+  switch (t) {
+    case Token::LParen:
+      return "LParen";
+    case Token::RParen:
+      return "RParen";
+    case Token::Ampersat:
+      return "Ampersat";
+    case Token::Plus:
+      return "Plus";
+    case Token::Minus:
+      return "Minus";
+    case Token::Asterisk:
+      return "Asterisk";
+    case Token::FSlash:
+      return "FSlash";
+    case Token::Percent:
+      return "Percent";
+    case Token::And:
+      return "And";
+    case Token::Or:
+      return "Or";
+    case Token::Not:
+      return "Not";
+    case Token::BitAnd:
+      return "BitAnd";
+    case Token::BitOr:
+      return "BitOr";
+    case Token::BitXor:
+      return "BitXor";
+    case Token::BitNot:
+      return "BitNot";
+    case Token::Equal:
+      return "Equal";
+    case Token::Greater:
+      return "Greater";
+    case Token::Less:
+      return "Less";
+    case Token::NotEq:
+      return "NotEq";
+    case Token::GreaterEq:
+      return "GreaterEq";
+    case Token::LessEq:
+      return "LessEq";
+    case Token::LCurly:
+      return "LCurly";
+    case Token::RCurly:
+      return "RCurly";
+    case Token::LBracket:
+      return "LBracket";
+    case Token::RBracket:
+      return "RBracket";
+    case Token::Arrow:
+      return "Arrow";
+    case Token::Semicolon:
+      return "Semicolon";
+    case Token::Ellipsis:
+      return "Ellipsis";
+    case Token::Comma:
+      return "Comma";
+    case Token::Period:
+      return "Period";
+    case Token::Assign:
+      return "Assign";
+    case Token::AssignAdd:
+      return "AssignAdd";
+    case Token::AssignSub:
+      return "AssignSub";
+    case Token::AssignMul:
+      return "AssignMul";
+    case Token::AssignDiv:
+      return "AssignDiv";
+    case Token::AssignMod:
+      return "AssignMod";
+    case Token::IntegralLiteral:
+      return "IntegralLiteral";
+    case Token::FloatLiteral:
+      return "FloatLiteral";
+    case Token::StringLiteral:
+      return "StringLiteral";
+    case Token::TimeLiteral:
+      return "TimeLiteral";
+    case Token::Identifier:
+      return "Identifier";
+    case Token::Invalid:
+      return "Invalid";
+    case Token::Eof:
+      return "Eof";
+    default:
+      return "None";
+  }
+}
+} // namespace lang
