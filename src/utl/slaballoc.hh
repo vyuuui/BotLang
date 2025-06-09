@@ -60,7 +60,13 @@ private:
     static_assert(kMaxObjects > 2, "Objects must be small enough to fit at least two per PageSize");
 
     SlabHeader* header() {
-      return reinterpret_cast<std::uintptr_t>(this) + kPageSize - sizeof(SlabHeader);
+      return reinterpret_cast<SlabHeader*>(
+        reinterpret_cast<std::uintptr_t>(this) + kPageSize - sizeof(SlabHeader));
+    }
+
+    SlabHeader const* header() const {
+      return reinterpret_cast<SlabHeader const*>(
+        reinterpret_cast<std::uintptr_t>(this) + kPageSize - sizeof(SlabHeader));
     }
 
     static Slab* create() {
@@ -71,10 +77,10 @@ private:
 
     void init() {
       for (std::size_t i = 0; i < kMaxObjects - 1; i++) {
-        reinterpret_cast<Alloc*>(this)[i]->nextfree =
+        reinterpret_cast<Alloc*>(this)[i].nextfree =
          reinterpret_cast<Alloc*>(this) + i + 1;
       }
-      reinterpret_cast<Alloc*>(this)[kMaxObjects - 1]->nextfree = nullptr;
+      reinterpret_cast<Alloc*>(this)[kMaxObjects - 1].nextfree = nullptr;
       header()->free_list = reinterpret_cast<Alloc*>(this);
       header()->prev = nullptr;
       header()->next = nullptr;
@@ -128,7 +134,7 @@ private:
 
       for (std::size_t i = 0; i < kMaxObjects; i++) {
         if (destruct_tbl[i]) {
-          destroy(first_obj + i);
+          destroy(&(first_obj + i)->obj);
         }
       }
     }
@@ -140,6 +146,27 @@ private:
   Slab* _full;
 
 private:
+  void free_internal() {
+    while (_free != nullptr) {
+      _free->~Slab();
+      Slab* oldf = _free;
+      ll_remove(&_free, _free);
+      page_free(oldf);
+    }
+    while (_partial != nullptr) {
+      _partial->~Slab();
+      Slab* oldp = _partial;
+      ll_remove(&_partial, _partial);
+      page_free(oldp);
+    }
+    while (_full != nullptr) {
+      _full->~Slab();
+      Slab* oldf = _full;
+      ll_remove(&_full, _full);
+      page_free(oldf);
+    }
+  }
+
   T* alloc_partial() {
     T* ret = _partial->alloc();
     if (_partial->is_full()) {
@@ -155,6 +182,7 @@ private:
     Slab* oldf = _free;
     ll_remove(&_free, oldf);
     ll_insert(&_partial, oldf);
+    return ret;
   }
 
   T* alloc_new() {
@@ -191,6 +219,27 @@ private:
 
 public:
   SlabAllocator() : _free(nullptr), _partial(nullptr), _full(nullptr) {}
+  SlabAllocator(SlabAllocator const&) = delete;
+  SlabAllocator(SlabAllocator&& other)
+    : _free(other._free), _partial(other._partial), _full(other._full) {
+    other._free = nullptr;
+    other._partial = nullptr;
+    other._full = nullptr;
+  }
+
+  SlabAllocator& operator=(SlabAllocator const& rhs) = delete;
+  SlabAllocator& operator=(SlabAllocator&& rhs) {
+    free_internal();
+
+    _free = rhs._free;
+    _partial = rhs._partial;
+    _full = rhs._full;
+
+    rhs._free = nullptr;
+    rhs._partial = nullptr;
+    rhs._full = nullptr;
+    return *this;
+  }
 
   T* alloc() {
     if (_partial != nullptr) {
@@ -218,21 +267,7 @@ public:
   }
 
   ~SlabAllocator() {
-    while (_free != nullptr) {
-      _free->~Slab();
-      page_free(_free);
-      ll_remove(&_free, _free);
-    }
-    while (_partial != nullptr) {
-      _partial->~Slab();
-      page_free(_partial);
-      ll_remove(&_partial, _partial);
-    }
-    while (_full != nullptr) {
-      _full->~Slab();
-      page_free(_full);
-      ll_remove(&_full, _full);
-    }
+    free_internal();
   }
 };
 } // namespace utl

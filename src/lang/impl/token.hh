@@ -51,11 +51,31 @@ enum class Token {
   // Literals
   IntegralLiteral,
   FloatLiteral,
+  DoubleLiteral,
   StringLiteral,
   TimeLiteral,
 
   FirstLiteral = IntegralLiteral,
   LastLiteral = TimeLiteral,
+
+  // Keywords
+  KwBehavior,
+  KwFn,
+  KwImport,
+  KwIf,
+  KwTask,
+  KwCondTask,
+  KwSeq,
+  KwSel,
+  KwPar,
+  KwCall,
+  KwDelay,
+  KwOnce,
+  KwRunFor,
+
+  FirstKeyword = KwBehavior,
+  FirstActionKeyword = KwIf,
+  LastKeyword = KwRunFor,
 
   // Everything else
   Identifier,
@@ -75,6 +95,6 @@ struct TokenData {
   TokenData(Token type, std::string&& val, StreamPos bpos, StreamPos epos) : type(type), val(std::move(val)), bpos(bpos), epos(epos) {}
   TokenData(uint64_t val, StreamPos bpos, StreamPos epos) : type(Token::IntegralLiteral), val(val), bpos(bpos), epos(epos) {}
   TokenData(float val, StreamPos bpos, StreamPos epos) : type(Token::FloatLiteral), val(val), bpos(bpos), epos(epos) {}
-  TokenData(double val, StreamPos bpos, StreamPos epos) : type(Token::FloatLiteral), val(val), bpos(bpos), epos(epos) {}
+  TokenData(double val, StreamPos bpos, StreamPos epos) : type(Token::DoubleLiteral), val(val), bpos(bpos), epos(epos) {}
 };
 } // namespace lang

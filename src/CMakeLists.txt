@@ -5,6 +5,8 @@ add_library(compiler-lib
   lang/impl/lex.cc
   lang/impl/lex.hh
   lang/impl/parse.hh
+  lang/impl/parse.cc
+  lang/impl/parsecomb.hh
   lang/impl/token.cc
   lang/impl/token.hh
   utl/queue.hh

@@ -32,6 +32,7 @@ public:
 };
 
 class Lexer {
+private:
   constexpr inline static std::size_t kQueueSize = 32;
 
   utl::CyclicQueue<TokenData, kQueueSize> peek_queue;
@@ -40,6 +41,7 @@ class Lexer {
 
   std::optional<Err> lex_failure;
 
+private:
   void skip_to_non_ws();
   void lex_new();
   void lex_ident();
@@ -53,13 +55,13 @@ class Lexer {
 public:
   Lexer(std::istream& iobuf) : rdbuf(iobuf) {}
 
-  Result<Token> peek();
+  std::optional<Token> peek();
   // Lifetime only persists until eat
-  Result<TokenData const*> peek_data();
-
-  bool peek_n(Token* n, size_t count);
-  bool peek_n_data(TokenData* n, size_t count);
+  std::optional<TokenData const*> peek_data();
 
   void eat();
+  bool has_err() const { return lex_failure.has_value(); }
+  Err lex_err() { return lex_failure.value(); }
+  Err err_at_head(std::string&& message);
 };
 } // namespace lang

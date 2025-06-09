@@ -4,6 +4,8 @@
 #include "utl/resvec.hh"
 #include "utl/utf8.hh"
 
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace lang {
@@ -204,6 +206,27 @@ Result<std::pair<ImmType, std::string>> run_numeric_dfa(Utf8Reader& rdbuf) {
 
   return Result<std::pair<ImmType, std::string>>::ok(std::make_pair(cur->type, result_build.str()));
 }
+
+const std::unordered_map<std::string, Token> kKwMap = {
+  {"behavior", Token::KwBehavior},
+  {"fn", Token::KwFn},
+  {"import", Token::KwImport},
+  {"if", Token::KwIf},
+  {"task", Token::KwTask},
+  {"condtask", Token::KwCondTask},
+  {"seq", Token::KwSeq},
+  {"sel", Token::KwSel},
+  {"par", Token::KwPar},
+  {"call", Token::KwCall},
+  {"delay", Token::KwDelay},
+  {"once", Token::KwOnce},
+  {"runfor", Token::KwRunFor},
+};
+
+std::optional<Token> as_keyword(std::string const& ident) {
+  auto ret = kKwMap.find(ident);
+  return ret == kKwMap.end() ? std::nullopt : std::make_optional(ret->second);
+}
 } // namespace
 
 Utf8Reader::Utf8Reader(std::istream& iobuf) : iobuf(iobuf), peekbuf(EOF, 0), is_bad(false), cur(0, 1, 1), scan(0, 1, 1) {
@@ -268,11 +291,17 @@ void Lexer::lex_new() {
 
 void Lexer::lex_ident() {
   std::ostringstream out_ident;
-  while (isalpha(rdbuf.peek().val) || rdbuf.peek().val == '_') {
+  // alnum safe here as call point gates it as alpha or _
+  while (isalnum(rdbuf.peek().val) || rdbuf.peek().val == '_') {
     out_ident.put(rdbuf.peek().val);
     rdbuf.next();
   }
-  peek_queue.emplace(Token::Identifier, out_ident.str(), rdbuf.cursorb(), rdbuf.cursore());
+  std::string ident = out_ident.str();
+  if (std::optional<Token> kw = as_keyword(ident); kw) {
+    peek_queue.emplace(*kw, "", rdbuf.cursorb(), rdbuf.cursore());
+  } else {
+    peek_queue.emplace(Token::Identifier, out_ident.str(), rdbuf.cursorb(), rdbuf.cursore());
+  }
   rdbuf.movecursor();
 }
 
@@ -438,58 +467,33 @@ void Lexer::fail_now(std::string&& message) {
   rdbuf.movecursor();
 }
 
-Result<Token> Lexer::peek() {
+std::optional<Token> Lexer::peek() {
   if (peek_queue.empty()) {
     lex_new();
   }
-  return lex_failure ? Result<Token>::err(*lex_failure) : Result<Token>::ok(peek_queue.peek().type);
+  return lex_failure ? std::nullopt : std::make_optional(peek_queue.peek().type);
 }
 
-Result<TokenData const*> Lexer::peek_data() {
+std::optional<TokenData const*> Lexer::peek_data() {
   if (peek_queue.empty()) {
     lex_new();
   }
-  return lex_failure ? Result<TokenData const*>::err(*lex_failure) : Result<TokenData const*>::ok(&peek_queue.peek());
-}
-
-bool Lexer::peek_n(Token* n, size_t count) {
-  if (lex_failure || count > peek_queue.capacity()) {
-    return false;
-  }
-
-  while (peek_queue.size() < count) {
-    lex_new();
-    if (lex_failure) {
-      return false;
-    }
-  }
-
-  for (size_t i = 0; i < count; i++) {
-    n[i] = peek_queue.get(i).type;
-  }
-  return true;
-}
-
-bool Lexer::peek_n_data(TokenData* n, size_t count) {
-  if (lex_failure || count > peek_queue.capacity()) {
-    return false;
-  }
-
-  while (peek_queue.size() < count) {
-    lex_new();
-    if (lex_failure) {
-      return false;
-    }
-  }
-
-  for (size_t i = 0; i < count; i++) {
-    n[i] = peek_queue.get(i);
-  }
-  return true;
+  return lex_failure ? std::nullopt : std::make_optional(&peek_queue.peek());
 }
 
 void Lexer::eat() {
   // deq has assertion
   peek_queue.pop();
+}
+
+Err Lexer::err_at_head(std::string&& message) {
+  if (has_err()) {
+    return *lex_failure;
+  } else if (peek_queue.size() > 0) {
+    TokenData const& dat = peek_queue.peek();
+    return Err(dat.bpos, dat.epos, std::move(message));
+  } else {
+    return Err(rdbuf.cursorb(), rdbuf.cursore(), std::move(message));
+  }
 }
 } // namespace lang

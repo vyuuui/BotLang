@@ -79,6 +79,8 @@ const char* tokstr(Token t) {
       return "IntegralLiteral";
     case Token::FloatLiteral:
       return "FloatLiteral";
+    case Token::DoubleLiteral:
+      return "DoubleLiteral";
     case Token::StringLiteral:
       return "StringLiteral";
     case Token::TimeLiteral:
@@ -89,6 +91,32 @@ const char* tokstr(Token t) {
       return "Invalid";
     case Token::Eof:
       return "Eof";
+    case Token::KwBehavior:
+      return "behavior";
+    case Token::KwFn:
+      return "fn";
+    case Token::KwImport:
+      return "import";
+    case Token::KwIf:
+      return "if";
+    case Token::KwTask:
+      return "task";
+    case Token::KwCondTask:
+      return "condtask";
+    case Token::KwSeq:
+      return "seq";
+    case Token::KwSel:
+      return "sel";
+    case Token::KwPar:
+      return "par";
+    case Token::KwCall:
+      return "call";
+    case Token::KwDelay:
+      return "delay";
+    case Token::KwOnce:
+      return "once";
+    case Token::KwRunFor:
+      return "runfor";
     default:
       return "None";
   }
