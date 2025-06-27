@@ -9,6 +9,8 @@ const char* tokstr(Token t) {
       return "RParen";
     case Token::Ampersat:
       return "Ampersat";
+    case Token::Ampersand:
+      return "Ampersand";
     case Token::Plus:
       return "Plus";
     case Token::Minus:
@@ -25,14 +27,16 @@ const char* tokstr(Token t) {
       return "Or";
     case Token::Not:
       return "Not";
-    case Token::BitAnd:
-      return "BitAnd";
     case Token::BitOr:
       return "BitOr";
     case Token::BitXor:
       return "BitXor";
     case Token::BitNot:
       return "BitNot";
+    case Token::Rsh:
+      return "Rsh";
+    case Token::Lsh:
+      return "Lsh";
     case Token::Equal:
       return "Equal";
     case Token::Greater:
@@ -57,6 +61,10 @@ const char* tokstr(Token t) {
       return "Arrow";
     case Token::Semicolon:
       return "Semicolon";
+    case Token::Colon:
+      return "Colon";
+    case Token::CColon:
+      return "CColon";
     case Token::Ellipsis:
       return "Ellipsis";
     case Token::Comma:
@@ -91,32 +99,6 @@ const char* tokstr(Token t) {
       return "Invalid";
     case Token::Eof:
       return "Eof";
-    case Token::KwBehavior:
-      return "behavior";
-    case Token::KwFn:
-      return "fn";
-    case Token::KwImport:
-      return "import";
-    case Token::KwIf:
-      return "if";
-    case Token::KwTask:
-      return "task";
-    case Token::KwCondTask:
-      return "condtask";
-    case Token::KwSeq:
-      return "seq";
-    case Token::KwSel:
-      return "sel";
-    case Token::KwPar:
-      return "par";
-    case Token::KwCall:
-      return "call";
-    case Token::KwDelay:
-      return "delay";
-    case Token::KwOnce:
-      return "once";
-    case Token::KwRunFor:
-      return "runfor";
     default:
       return "None";
   }

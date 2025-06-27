@@ -10,14 +10,14 @@
 #include <vector>
 
 namespace lang {
-class Parser;
+class StatePrivate;
 
 struct ParseState {
   Lexer& l;
   std::optional<Err> e;
-  Parser* p;
+  StatePrivate* priv;
 
-  ParseState(Lexer& l, Parser* p) : l(l), p(p) {}
+  ParseState(Lexer& l) : l(l), priv(nullptr) {}
 };
 
 template <typename T, template <typename...> typename U>
@@ -32,10 +32,9 @@ concept Optional = is_outer_same_v<T, std::optional>;
 template <typename T>
 concept Combinator = requires (T t, ParseState& s) {
   typename T::Rt;
-  typename T::HeadType;
-  requires std::same_as<std::decay_t<decltype(T::Lookahead)>, typename T::HeadType>;
   requires std::same_as<std::decay_t<decltype(T::Skippable)>, bool>;
   { t.run(s) } -> Optional;
+  { t.test(s) } -> std::same_as<bool>;
 };
 
 template <typename T>
@@ -66,10 +65,31 @@ constexpr auto lookahead_seq() {
   }
 }
 
-template <typename Rt, typename... Args>
-constexpr Rt rtype(Rt(*)(Args...));
-template <typename C, typename Rt, typename... Args>
-constexpr Rt rtype(Rt(C::*)(Args...));
+// Run an ordered set of sub-combinator tests depending on their skippability
+template <Combinator Sub0, Combinator... Subs>
+constexpr bool test_all(ParseState& s) {
+  if constexpr (Sub0::Skippable) {
+    if constexpr (sizeof...(Subs) == 0) {
+      return Sub0::test(s);
+    } else {
+      return Sub0::test(s) || test_all<Subs...>(s);
+    }
+  } else {
+    return Sub0::test(s);
+  }
+}
+
+template <typename T>
+struct rtype : public rtype<decltype(&T::operator())> {};
+template <typename Ret, typename... Args>
+struct rtype<Ret(*)(Args...)> { using type = Ret; };
+template <typename C, typename Ret, typename... Args>
+struct rtype<Ret(C::*)(Args...)> { using type = Ret; };
+template <typename C, typename Ret, typename... Args>
+struct rtype<Ret(C::*)(Args...) const> { using type = Ret; };
+
+template <typename T>
+using rtype_t = typename rtype<T>::type;
 
 template <typename T>
 struct safe_void { using type = T; };
@@ -93,16 +113,43 @@ template <Token T>
 struct Match {
   using Rt = std::monostate;
 
-  using HeadType = std::tuple<Token>;
-  constexpr inline static HeadType Lookahead = T;
   constexpr inline static bool Skippable = false;
 
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == T;
+  }
+
   static std::optional<std::monostate> run(ParseState& s) {
-    if (s.l.peek() == T) {
+    if (test(s)) {
       s.l.eat();
       return std::monostate{};
     }
     s.e = s.l.err_at_head(std::string("Expected ") + tokstr(T));
+    return std::nullopt;
+  }
+};
+
+template <typename Str, bool Output>
+struct MatchId {
+  using Rt = typename std::conditional_t<Output, std::string, std::monostate>;
+
+  constexpr inline static bool Skippable = false;
+
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == Token::Identifier &&
+           std::get<std::string>(s.l.peek_data().value()->val) == Str::str();
+  }
+
+  static std::optional<Rt> run(ParseState& s) {
+    if (test(s)) {
+      s.l.eat();
+      if constexpr (Output) {
+        return std::get<std::string>(s.l.peek_data().value()->val);
+      } else {
+        return std::monostate{};
+      }
+    }
+    s.e = s.l.err_at_head(std::string("Expected keyword ") + Str::str());
     return std::nullopt;
   }
 };
@@ -114,15 +161,17 @@ struct Extract {
                 T == Token::FloatLiteral ||
                 T == Token::DoubleLiteral ||
                 T == Token::StringLiteral, "Invalid token type marked for extraction");
-  using Rt = safe_void_t<decltype(rtype(Func))>;
+  using Rt = safe_void_t<rtype_t<decltype(Func)>>;
   constexpr inline static bool IsMonostate = std::is_same_v<Rt, std::monostate>;
 
-  using HeadType = std::tuple<Token>;
-  constexpr inline static HeadType Lookahead = T;
   constexpr inline static bool Skippable = false;
 
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == T;
+  }
+
   static std::optional<Rt> run(ParseState& s) {
-    if (s.l.peek() == T) {
+    if (test(s)) {
       if constexpr (IsMonostate) {
         Func(s, *s.l.peek_data());
         s.l.eat();
@@ -133,41 +182,124 @@ struct Extract {
         return std::move(leaf);
       }
     }
-    s.l.err_at_head(std::string("Expected ") + tokstr(T));
+    s.e = s.l.err_at_head(std::string("Expected ") + tokstr(T));
     return std::nullopt;
   }
 };
 
-template <Token Tl, Token Th, typename ErrStr, auto Func>
-struct MatchRange {
-  static_assert(static_cast<int>(Tl) < static_cast<int>(Th), "Expected valid token range");
-  using Rt = safe_void_t<decltype(rtype(Func))>;
+template <Token... Ts>
+struct ExtractSet {
+  using Rt = Token;
   constexpr inline static bool IsMonostate = std::is_same_v<Rt, std::monostate>;
 
-  using HeadType = decltype(gen_token_range_incl<Token::FirstKeyword, Token::LastKeyword>());
-  constexpr inline static HeadType Lookahead = gen_token_range_incl<Token::FirstKeyword, Token::LastKeyword>();
   constexpr inline static bool Skippable = false;
 
+  static constexpr bool test(ParseState& s) {
+    return eq_any(s.l.peek(), std::make_tuple(Ts...));
+  }
+
   static std::optional<Rt> run(ParseState& s) {
-    std::optional<Token> mtok = s.l.peek();
-    if (!mtok) {
-      return std::nullopt;
+    if (test(s)) {
+      auto ret = s.l.peek();
+      s.l.eat();
+      return ret;
     }
-    Token tok = *mtok;
-    if (static_cast<int>(tok) >= static_cast<int>(Tl) &&
-        static_cast<int>(tok) <= static_cast<int>(Th)) {
-      if constexpr (IsMonostate) {
-        Func(s, tok);
-        s.l.eat();
-        return std::monostate{};
-      } else {
-        Rt leaf = std::move(Func(s, tok));
-        s.l.eat();
-        return std::move(leaf);
-      }
-    }
-    s.e = s.l.err_at_head(ErrStr::str());
+    s.e = s.l.err_at_head(std::string("TODO: Expected for extractset"));
     return std::nullopt;
+  }
+};
+
+template <Token T>
+struct Flag {
+  using Rt = bool;
+
+  constexpr inline static bool Skippable = true;
+
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == T;
+  }
+
+  // stupid optional
+  static std::optional<Rt> run(ParseState& s) {
+    if (test(s)) {
+      s.l.eat();
+      return true;
+    }
+    return false;
+  }
+};
+
+template <Token T, Combinator Sub>
+struct Maybe {
+  using Rt = std::optional<typename Sub::Rt>;
+
+  constexpr inline static bool Skippable = true;
+
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == T;
+  }
+
+  // stupid optional
+  static std::optional<Rt> run(ParseState& s) {
+    if (test(s)) {
+      s.l.eat();
+      auto sub = std::move(Sub::run(s));
+      if (!sub) {
+        return std::nullopt;
+      }
+      return sub;
+    }
+    // No comment
+    return std::make_optional<Rt>(std::nullopt);
+  }
+};
+
+template <typename Str, Combinator Sub>
+struct MaybeId {
+  using Rt = std::optional<typename Sub::Rt>;
+
+  constexpr inline static bool Skippable = true;
+
+  static constexpr bool test(ParseState& s) {
+    return s.l.peek() == Token::Identifier &&
+           std::get<std::string>(s.l.peek_data().value()->val) == Str::str();
+  }
+
+  // stupid optional
+  static std::optional<Rt> run(ParseState& s) {
+    if (test(s)) {
+      s.l.eat();
+      auto sub = std::move(Sub::run(s));
+      if (!sub) {
+        return std::nullopt;
+      }
+      return sub;
+    }
+    // No comment
+    return std::make_optional<Rt>(std::nullopt);
+  }
+};
+
+template <Combinator Sub>
+struct Repeat {
+  using Rt = std::vector<typename Sub::Rt>;
+
+  constexpr inline static bool Skippable = true;
+
+  static constexpr bool test(ParseState& s) {
+    return Sub::test(s);
+  }
+
+  static std::optional<Rt> run(ParseState& s) {
+    Rt ret;
+    while (test(s)) {
+      std::optional<typename Sub::Rt> sub = std::move(Sub::run(s));
+      if (!sub) {
+        return std::nullopt;
+      }
+      ret.emplace_back(std::move(*sub));
+    }
+    return std::move(ret);
   }
 };
 
@@ -175,20 +307,22 @@ template <Combinator Sub, Token... Inter>
 struct Intercalate {
   using Rt = std::vector<typename Sub::Rt>;
 
-  using HeadType = typename Sub::HeadType;
-  constexpr inline static HeadType Lookahead = Sub::Lookahead;
   constexpr inline static bool Skippable = true;
 
   using InterType = decltype(std::make_tuple(Inter...));
   constexpr inline static InterType InterSet = std::make_tuple(Inter...);
 
+  static constexpr bool test(ParseState& s) {
+    return Sub::test(s);
+  }
+
   static std::optional<Rt> run(ParseState& s) {
     Rt list;
-    if (!eq_any(s.l.peek(), Lookahead)) {
+    if (!test(s)) {
       return std::move(list);
     }
 
-    std::optional<typename Sub::Rt> sub0 = Sub::run(s);
+    std::optional<typename Sub::Rt> sub0 = std::move(Sub::run(s));
     // Failure already reported by child combinator
     if (!sub0) {
       return std::nullopt;
@@ -198,7 +332,7 @@ struct Intercalate {
     while (eq_any(s.l.peek(), InterSet)) {
       const Token i_type = *s.l.peek();
       s.l.eat();
-      std::optional<typename Sub::Rt> sub = Sub::run(s);
+      std::optional<typename Sub::Rt> sub = std::move(Sub::run(s));
       // Failure already reported by child combinator
       if (!sub) {
         return std::nullopt;
@@ -217,13 +351,15 @@ struct PrefixRepeat {
   using PrefixType = decltype(std::make_tuple(Pre...));
   constexpr inline static PrefixType PreSet = std::make_tuple(Pre...);
 
-  using HeadType = decltype(std::tuple_cat(PreSet, Sub::Lookahead));
-  constexpr inline static HeadType Lookahead = std::tuple_cat(PreSet, Sub::Lookahead);
   constexpr inline static bool Skippable = Sub::Skippable;
+
+  static constexpr bool test(ParseState& s) {
+    return eq_any(s.l.peek(), PreSet) || Sub::test(s);
+  }
 
   static std::optional<Rt> run(ParseState& s) {
     std::vector<Token> tok_stack;
-    if (eq_any(s.l.peek(), PreSet)) {
+    while (eq_any(s.l.peek(), PreSet)) {
       Token match = *s.l.peek();
       s.l.eat();
       tok_stack.push_back(match);
@@ -250,9 +386,11 @@ struct InfixRepeat {
   using InfixType = decltype(std::make_tuple(Inf...));
   constexpr inline static InfixType InfSet = std::make_tuple(Inf...);
 
-  using HeadType = typename Sub::HeadType;
-  constexpr inline static HeadType Lookahead = Sub::Lookahead;
   constexpr inline static bool Skippable = Sub::Skippable;
+
+  static constexpr bool test(ParseState& s) {
+    return Sub::test(s);
+  }
 
   static std::optional<Rt> run(ParseState& s) {
     std::optional<Rt> sub0 = std::move(Sub::run(s));
@@ -277,17 +415,20 @@ struct InfixRepeat {
   }
 };
 
-
-
 // CAUTION: does not advertise a head explicitly!
 template <auto Func, Token... Head>
 struct Call {
-  using Rt = safe_void_t<decltype(rtype(Func))>;
+  using Rt = safe_void_t<rtype_t<decltype(Func)>>;
   constexpr inline static bool IsMonostate = std::is_same_v<Rt, std::monostate>;
 
-  using HeadType = decltype(std::make_tuple(Head...));
-  constexpr inline static HeadType Lookahead = std::make_tuple(Head...);
   constexpr inline static bool Skippable = false;
+
+  static constexpr bool test(ParseState& s) {
+    if constexpr (sizeof...(Head) > 0) {
+      return eq_any(s.l.peek(), std::make_tuple(Head...));
+    }
+    return true;
+  }
 
   static std::optional<Rt> run(ParseState& s) {
     if constexpr (IsMonostate) {
@@ -317,9 +458,14 @@ struct Chain {
                 std::is_same_v<typename Rhs::Rt, std::monostate>,
                 "Chained parsers both provide a result");
 
-  using HeadType = decltype(lookahead_seq<Lhs, Rhs>());
-  constexpr inline static HeadType Lookahead = lookahead_seq<Lhs, Rhs>();
   constexpr inline static bool Skippable = Lhs::Skippable && Rhs::Skippable;
+
+  static constexpr bool test(ParseState& s) {
+    if constexpr (Lhs::Skippable) {
+      return Lhs::test(s) && Rhs::test(s);
+    }
+    return Lhs::test(s);
+  }
 
   static std::optional<Rt> run(ParseState& s) {
     auto lhs = Lhs::run(s);
@@ -347,9 +493,11 @@ struct Select {
   static_assert((std::is_same_v<typename T0::Rt, typename Ts::Rt> && ...),
                 "All options must have the same return type"); 
 
-  using HeadType = decltype(std::tuple_cat(T0::Lookahead, Ts::Lookahead...));
-  constexpr inline static HeadType Lookahead = std::tuple_cat(T0::Lookahead, Ts::Lookahead...);
   constexpr inline static bool Skippable = T0::Skippable && (Ts::Skippable && ...);
+
+  static constexpr bool test(ParseState& s) {
+    return T0::test(s) || (Ts::test(s) || ...);
+  }
 
   static std::optional<Rt> run(ParseState& s) {
     return run_inner<void>(s, std::make_index_sequence<sizeof...(Ts)>());
@@ -361,10 +509,10 @@ struct Select {
     // For future me:
     // Check if the next token is in the current(expanded) T's lookahead list
     // if it is, attempt a run on it and stop here
-    bool res = (eq_any(s.l.peek(), T0::Lookahead) ?
+    bool res = (T0::test(s) ?
                 (ret = T0::run(s), true) :
                 false) ||
-               ((eq_any(s.l.peek(), Ts::Lookahead) ?
+               ((Ts::test(s) ?
                  (ret = Ts::run(s), true) :
                  false) || ...);
     if (res && !ret) {
@@ -392,12 +540,16 @@ struct SelectErr : Select<Ts...> {
 
 template <auto Func, Combinator Sub0, Combinator... Subs>
 struct Collect {
-  using Rt = safe_void_t<decltype(rtype(Func))>;
+  static_assert(std::is_invocable_v<decltype(Func), ParseState&, typename Sub0::Rt, typename Subs::Rt...>,
+                "Function parameters do not match parser output types");
+  using Rt = safe_void_t<rtype_t<decltype(Func)>>;
   constexpr inline static bool IsMonostate = std::is_same_v<Rt, std::monostate>;
 
-  using HeadType = decltype(lookahead_seq<Sub0, Subs...>());
-  constexpr inline static HeadType Lookahead = lookahead_seq<Sub0, Subs...>();
   constexpr inline static bool Skippable = Sub0::Skippable && (Subs::Skippable && ...);
+
+  static constexpr bool test(ParseState& s) {
+    return test_all<Sub0, Subs...>(s);
+  }
 
   template <std::size_t Idx = 0>
   static inline bool safe_apply(ParseState& s,
@@ -429,6 +581,28 @@ struct Collect {
   }
 };
 
+template <Combinator First, Combinator Second>
+struct Alternative {
+  using Rt = typename First::Rt;
+  static_assert((std::is_same_v<typename First::Rt, typename Second::Rt>),
+                "All options must have the same return type"); 
+
+  static constexpr bool test(ParseState& s) {
+    return test_all<First, Second>(s);
+  }
+
+  static std::optional<Rt> run(ParseState& s) {
+    s.l.mark();
+    std::optional<typename First::Rt> res = std::move(First::run(s));
+    if (!res) {
+      s.l.rewind();
+      s.e = std::nullopt;
+      return std::move(Second::run(s));
+    }
+    return std::move(res);
+  }
+};
+
 //////////////////////
 // Helper functions //
 //////////////////////
@@ -442,15 +616,34 @@ struct Collect {
 template <Token T>
 constexpr Match<T> match() { return Match<T>(); }
 
+// Matches a specific identifier based on the str() field of Str
+template <bool Output = false, typename Str>
+constexpr MatchId<Str, Output> match_id(Str) { return MatchId<Str, Output>(); }
+
 // Match and extract the data of specified token type T.
 // Valid token types for extraction are Identifier, IntegralLiteral, FloatLiteral, DoubleLiteral, StringLiteral
 template <Token T, auto Func>
 constexpr Extract<T, Func> extract() { return Extract<T, Func>(); }
 
-// Matches a range of tokens, also notifying a func of the specific matched token
-// ErrStr required to specify the error message if not in the range
-template <Token Tl, Token Th, auto Func, typename ErrStr>
-constexpr MatchRange<Tl, Th, ErrStr, Func> match_range(ErrStr) { return MatchRange<Tl, Th, ErrStr, Func>(); }
+// Extract a token matching a set of possibilities
+template <Token... Ts>
+constexpr ExtractSet<Ts...> extract_set() { return ExtractSet<Ts...>(); }
+
+// Returns a bool if token T is present
+template <Token T>
+constexpr Flag<T> flag() { return Flag<T>(); }
+
+// Possibly run a combinator if lookahead matches T
+template <Token T, Combinator Sub>
+constexpr Maybe<T, Sub> maybe(Sub) { return Maybe<T, Sub>(); }
+
+// Possibly run a combinator if lookahead matches Str
+template <typename Str, Combinator Sub>
+constexpr MaybeId<Str, Sub> maybe_id(Str, Sub) { return MaybeId<Str, Sub>(); }
+
+// Repeat a combinator 0 or more times
+template <Combinator Sub>
+constexpr Repeat<Sub> repeat(Sub) { return Repeat<Sub>(); }
 
 // Repeatedly run a combinator separated by any set of equal-precedence intercalator tokens
 // Each sub-parse result is collected into a vector which will be the result to the parent combinator
@@ -473,6 +666,10 @@ constexpr Call<Func, Head...> call() { return Call<Func, Head...>(); }
 // Collect a set of results from combinators into a single call
 template <auto Func, Combinator... Sub>
 constexpr Collect<Func, Sub...> collect(Sub...) { return Collect<Func, Sub...>(); }
+
+// Attempt to run the first parser, and if a failure occurs recover and run the second parser
+template <Combinator First, Combinator Second>
+constexpr Alternative<First, Second> alternative(First, Second) { return Alternative<First, Second>(); }
 
 // Operator for sequencing combinators
 template <Combinator Lhs, Combinator Rhs>

@@ -1,0 +1,108 @@
+import "stdlib.bot"
+
+behavior (ensure_no_fish_to_loot) =
+  (@ensure_with_delay any_desired_fish_to_loot, loot_any_wanted_fish, 500ms, 500ms, 0ms)
+
+behavior (ensure_loot_menu_closed) =
+  (@ensure_with_delay is_loot_menu_open, close_loot, 500ms, 500ms, 0ms)
+
+behavior (ensure_fishing_pole_equipped) =
+  (@ensure_with_delay is_fishing_pole_equipped, equip_fishing_pole, 500ms, 500ms, 0ms)
+
+behavior (ensure_bauble_applied) =
+  (@ensure_with_delay check_bauble_conditions, apply_bauble, 500ms, 4000ms 0ms)
+
+behavior (ensure_fishing) =
+  (@ensure_with_delay is_local_player_fishing, cast_fishing_spell, 500ms, 500ms, 1000ms)
+
+behavior (ensure_no_bobber_to_click) =
+  (@ensure_with_delay bobber_has_bobbered, click_bobber, 500ms, 500ms 0ms)
+
+
+behavior (main) = (@impdo (@loot_manager_update)
+                          (@seq ensure_no_fish_to_loot,
+                                ensure_loot_menu_closed,
+                                ensure_fishing_pole_equipped,
+                                ensure_bauble_applied,
+                                ensure_fishing,
+                                ensure_no_bobber_to_click
+                          )
+                  )
+
+
+/////////////////////
+// imperative code //
+/////////////////////
+
+fn is_fishing_pole_equipped() -> bool {
+  var pole : Item = equipped_item_by_slot(InventorySlot.MainHand);
+
+  return pole.valid() && pole.get_name() == "FishingPole";
+}
+
+fn equip_fishing_pole() -> void {
+  var poles : [Item] = item_objects_for_id(ItemID.FishingPole);
+
+  if !poles.empty() {
+    cppcall<void, Item, InventorySlot>("equip_item_to_slot", poles[0], InventorySlot.MainHand);
+  }
+}
+
+fn is_loot_menu_open() -> bool {
+  return cppcall<u32>("get_num_loot_infos") > 0;
+}
+
+fn close_loot() -> void {
+  return cppcall<u32>("close_loot");
+}
+
+fn check_bauble_conditions() -> bool {
+  var player: Player = get_local_player();
+  return is_aura_active_for_unit(SpellID::BrightBaubleAura, player) &&
+         is_aura_active_for_unit(SpellID::ShinyBaubleAura, player);
+}
+
+fn is_local_player_fishing() -> bool {
+  var spell_id: SpellID = get_local_player().get_current_channel_spell_id();
+  return spell_id == SpellID.ApprenticeFishing ||
+         spell_id == SpellID.JourneymanFishing ||
+         spell_id == SpellID.ExpertFishing ||
+         spell_id == SpellID.ArtisanFishing ||
+         spell_id == SpellID.MasterFishing ||
+         spell_id == SpellID.GrandMasterFishing;
+}
+
+extern cast_spell_by_name(spell: string) -> void
+
+
+fn cast_fishing_spell() -> void {
+  // PROBLEM: c-strings and strings
+  ccall("cast_spell_by_name", "Fishing");
+}
+
+fn apply_bauble() -> void {
+  var pole : Item = equipped_item_by_slot(InventorySlot.MainHand);
+  guard pole? -> Status.FAILURE;
+
+  if does_item_exist(ItemID.BrightBaubles) {
+    use_item_on_target(ItemID.BrightBaubles, pole);
+  } else if does_item_exist(ItemID.ShinyBaubles) {
+    use_item_on_target(ItemID.ShinyBaubles, pole);
+  }
+}
+
+fn bobber_has_bobbered() -> bool {
+  var bobbers : [WOWObject] =
+    get_owned_objects_from_object_id(get_local_player().get_guid(),
+                                     ObjectID.FishingBobber);
+
+  return !bobbers.empty() && bobbers[0].get_anim_status();
+}
+
+fn click_bobber() -> void {
+  var bobbers : [WOWObject] =
+    get_owned_objects_from_object_id(get_local_player().get_guid(),
+                                     ObjectID.FishingBobber);
+
+  cpp_call<void, WOWObject>(bobbers[0]);
+}

@@ -29,7 +29,7 @@ std::array<SymTrieEntry, 128> kSymbolTbl0 = {
   SymTrieEntry(Token::Not, {'=', Token::NotEq}), // !, !=
   kEmpty, kEmpty, kEmpty,
   SymTrieEntry(Token::Percent, {'=', Token::AssignMod}), // %
-  SymTrieEntry(Token::BitAnd, {'&', Token::And}), // &
+  SymTrieEntry(Token::Ampersand, {'&', Token::And}), // &
   kEmpty,
   SymTrieEntry(Token::LParen), // (
   SymTrieEntry(Token::RParen), // )
@@ -39,11 +39,12 @@ std::array<SymTrieEntry, 128> kSymbolTbl0 = {
   SymTrieEntry(Token::Minus, {'=', Token::AssignSub}, {'>', Token::Arrow}), // -
   SymTrieEntry(Token::Period, {'.', Token::Ellipsis}), // .
   SymTrieEntry(Token::FSlash, {'=', Token::AssignDiv}), // /
-  kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty,
+  kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty,
+  SymTrieEntry(Token::Colon, {':', Token::CColon}), // :, ::
   SymTrieEntry(Token::Semicolon), // ;
-  SymTrieEntry(Token::Less, {'=', Token::LessEq}), // <
+  SymTrieEntry(Token::Less, {'=', Token::LessEq}, {'<', Token::Lsh}), // <
   SymTrieEntry(Token::Assign, {'=', Token::Equal}), // =
-  SymTrieEntry(Token::Greater, {'=', Token::GreaterEq}), // >
+  SymTrieEntry(Token::Greater, {'=', Token::GreaterEq}, {'>', Token::Rsh}), // >
   kEmpty,
   SymTrieEntry(Token::Ampersat), // @
   kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty, kEmpty,
@@ -206,27 +207,6 @@ Result<std::pair<ImmType, std::string>> run_numeric_dfa(Utf8Reader& rdbuf) {
 
   return Result<std::pair<ImmType, std::string>>::ok(std::make_pair(cur->type, result_build.str()));
 }
-
-const std::unordered_map<std::string, Token> kKwMap = {
-  {"behavior", Token::KwBehavior},
-  {"fn", Token::KwFn},
-  {"import", Token::KwImport},
-  {"if", Token::KwIf},
-  {"task", Token::KwTask},
-  {"condtask", Token::KwCondTask},
-  {"seq", Token::KwSeq},
-  {"sel", Token::KwSel},
-  {"par", Token::KwPar},
-  {"call", Token::KwCall},
-  {"delay", Token::KwDelay},
-  {"once", Token::KwOnce},
-  {"runfor", Token::KwRunFor},
-};
-
-std::optional<Token> as_keyword(std::string const& ident) {
-  auto ret = kKwMap.find(ident);
-  return ret == kKwMap.end() ? std::nullopt : std::make_optional(ret->second);
-}
 } // namespace
 
 Utf8Reader::Utf8Reader(std::istream& iobuf) : iobuf(iobuf), peekbuf(EOF, 0), is_bad(false), cur(0, 1, 1), scan(0, 1, 1) {
@@ -297,11 +277,7 @@ void Lexer::lex_ident() {
     rdbuf.next();
   }
   std::string ident = out_ident.str();
-  if (std::optional<Token> kw = as_keyword(ident); kw) {
-    peek_queue.emplace(*kw, "", rdbuf.cursorb(), rdbuf.cursore());
-  } else {
-    peek_queue.emplace(Token::Identifier, out_ident.str(), rdbuf.cursorb(), rdbuf.cursore());
-  }
+  peek_queue.emplace(Token::Identifier, out_ident.str(), rdbuf.cursorb(), rdbuf.cursore());
   rdbuf.movecursor();
 }
 

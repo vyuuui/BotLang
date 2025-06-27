@@ -63,5 +63,12 @@ public:
   bool has_err() const { return lex_failure.has_value(); }
   Err lex_err() { return lex_failure.value(); }
   Err err_at_head(std::string&& message);
+
+  // For retrying parses
+  // TODO:
+  // possibly optimizable by dumping eaten tokens into a discard buffer
+  // then reloading them into the peek buffer on rewind?
+  void mark();
+  void rewind();
 };
 } // namespace lang

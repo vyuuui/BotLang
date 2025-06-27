@@ -11,41 +11,9 @@ using namespace lang;
 void ptree(BTNode const* n) {
   printf("(");
   switch (n->type) {
-    case bt::Type::Action: {
-      switch (std::get<bt::Action>(n->ast_data)) {
-        case bt::Action::Call:
-          printf("call");
-          break;
-        case bt::Action::CondTask:
-          printf("condtask");
-          break;
-        case bt::Action::Delay:
-          printf("delay");
-          break;
-        case bt::Action::If:
-          printf("if");
-          break;
-        case bt::Action::Once:
-          printf("once");
-          break;
-        case bt::Action::Par:
-          printf("par");
-          break;
-        case bt::Action::Runfor:
-          printf("runfor");
-          break;
-        case bt::Action::Sel:
-          printf("sel");
-          break;
-        case bt::Action::Seq:
-          printf("seq");
-          break;
-        case bt::Action::Task:
-          printf("task");
-          break;
-      }
+    case bt::Type::Action:
+      printf("@%s", std::get<std::string>(n->ast_data).c_str());
       break;
-    }
     case bt::Type::BinaryOp: {
       switch (std::get<bt::BinOp>(n->ast_data)) {
         case bt::BinOp::Add:
@@ -147,9 +115,9 @@ void ptree(BTNode const* n) {
 void print_behavior(Behavior const& b) {
   printf("Behavior name and params: (%s", b.name.c_str());
   if (!b.params.empty()) {
-    printf(" %s", b.params.front().c_str());
+    printf(" %s", b.params.front().name.c_str());
     for (size_t i = 1; i < b.params.size(); i++) {
-      printf(", %s", b.params[i].c_str());
+      printf(", %s", b.params[i].name.c_str());
     }
   }
   printf(")\nBehavior body: ");

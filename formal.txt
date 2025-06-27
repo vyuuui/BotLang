@@ -1,0 +1,49 @@
+BotLang is split into two formats:
+Functional behavior tree definitions and imperative routines
+The entrypoint is always the behavior tree named "main"
+
+Behavior tree format:
+
+behavior (name param0, param1, ...) = (lisp_code_here)
+
+Behavior tree lisp has two forms, either invocation or evaluation
+invocation appears as:
+(@action input0, input1)
+
+this will invoke some kind of action provided the set of inputs
+The following actions are available
+(@if cond, st_true, st_false) -> If statement, evaluates cond and runs either st_true or st_false
+  returns either value of st_true or st_false, their types must be the same
+(@task subtree) -> Defines the start of a task tree
+(@condtask cond,subtree) -> Defines the start of a task tree which is conditionally executed
+Behavior controllers:
+all parameters must evaluate to a STATUS type
+(@seq a, b, c) -> Defines a sequence behavior tree node
+(@sel a, b, c) -> Defines a selector behavior tree node
+(@par a, b, c) -> Defines a parallel behavior tree node
+
+(@seq (call check_something, param0, param1) (call check_another_thing, param0, param1))
+
+(@call fn, p0, p1, p2) -> calls an imperative function fn with params p0, p1, p2
+  result evaluates to the return type of fn
+Task local actions:
+(@delay time) -> delays execution for the given amount of time. Once a delay runs its course, it is not paused at again until the enclosing task loses focus, is completed, or is forcefully reset
+  Returns RUNNING while delaying, and SUCCESS when complete
+(@once subtree) -> Executes a subtree one time within the bounds of a task
+  returns RUNNING when executed, and SUCCESS when skipping
+(@runfor time subtree) -> Repeatedly executes a subtree until time has ran, only within the bounds of a task
+  returns RUNNING when executed, and SUCCESS when complete
+
+
+Procedural code format:
+fn funcname(param0 : type0, param1 : type1, ...) -> returntype { body }
+
+valid statements:
+var creation - var varname: type ( = val)?
+expressions - <any valid expression, rooted at assignment>
+if stmt - if <condition> { body }
+if else stmt - if <condition> { body } else { body } -> evaluates to last expr in body
+while stmt - while <condition> { body } -> evaluates to VOID
+for stmt - for X in Y { body } -> evaluates to VOID
+
+

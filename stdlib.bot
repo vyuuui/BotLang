@@ -1,0 +1,71 @@
+behavior (ensure_with_delay pred act pre_act_tm exec_tm post_act_tm) =
+  (@condtask (@pred)
+             (@seq (@wait pre_act_tm)
+                   (@once act exec_tm)
+                   (@wait exec_tm)
+                   (@wait post_act_tm)
+             )
+             (SUCCESS)
+  )
+
+
+enum InventorySlot : u32 {
+}
+
+enum ItemID : u32 {
+}
+
+struct GUID {
+  u64 lo;
+  u64 hi;
+}
+
+interface WOWObject {
+  fn position() -> vec3 {
+  }
+
+  fn id() -> u32 {
+  }
+
+  fn guid() -> GUID {
+  }
+}
+
+interface Unit : WOWObject {
+}
+
+fn is_aura_active_for_unit(id: SpellID, unit: Unit) -> bool {
+  return cppcall<bool, SpellID, Unit>("is_aura_active_for_unit", id, unit);
+}
+
+fn aura_time_remaining_for_unit(id: SpellID, unit: Unit) -> Duration {
+  return cppcall<Duration, SpellID, Unit>("aura_time_remaining_for_unit", id, unit);
+}
+
+interface Item : WOWObject {
+  fn get_name() -> string {
+    return cppcall<string, Item>("GetObjectNameString", this);
+  }
+
+  // implicit bool ? -> bool { this == nullptr; }
+  // used like <interface instance>? evaluates to bool
+}
+
+interface Aura {
+  var spellID : int @ 0x98;
+}
+
+interface Player : Unit {
+}
+
+fn equipped_item_by_slot(slot: InventorySlot) -> Item {
+  return cppcall<Item, InventorySlot>("cppfuncname", slot);
+}
+
+fn item_objects_for_id(id: ItemID) -> [Item] {
+  return cppcall<[Item], ItemID>("item_objects_for_id", id);
+}
+
+fn get_local_player() -> Player {
+  return cppcall<Player>("get_local_player");
+}

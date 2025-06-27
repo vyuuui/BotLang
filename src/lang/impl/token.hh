@@ -11,6 +11,7 @@ enum class Token {
   LParen,    // (
   RParen,    // )
   Ampersat,  // @
+  Ampersand, // &
   Plus,      // +
   Minus,     // -
   Asterisk,  // *
@@ -19,10 +20,11 @@ enum class Token {
   And,       // &&
   Or,        // ||
   Not,       // !
-  BitAnd,    // &
   BitOr,     // |
   BitXor,    // ^
   BitNot,    // ~
+  Rsh,       // >>
+  Lsh,       // <<
   Equal,     // ==
   Greater,   // >
   Less,      // <
@@ -35,6 +37,8 @@ enum class Token {
   RBracket,  // ]
   Arrow,     // ->
   Semicolon, // ;
+  Colon,     // :
+  CColon,    // ::
   Ellipsis,  // ..
   Comma,     // ,
   Period,    // .
@@ -44,9 +48,15 @@ enum class Token {
   AssignMul, // *=
   AssignDiv, // /=
   AssignMod, // %=
+  AssignAnd, // &=
+  AssignXor, // ^=
+  AssignOr,  // |=
+  AssignNot, // ~=
+  AssignLsh, // <<=
+  AssignRsh, // >>=
 
   FirstSymbol = LParen,
-  LastSymbol = AssignMod,
+  LastSymbol = AssignRsh,
 
   // Literals
   IntegralLiteral,
@@ -57,25 +67,6 @@ enum class Token {
 
   FirstLiteral = IntegralLiteral,
   LastLiteral = TimeLiteral,
-
-  // Keywords
-  KwBehavior,
-  KwFn,
-  KwImport,
-  KwIf,
-  KwTask,
-  KwCondTask,
-  KwSeq,
-  KwSel,
-  KwPar,
-  KwCall,
-  KwDelay,
-  KwOnce,
-  KwRunFor,
-
-  FirstKeyword = KwBehavior,
-  FirstActionKeyword = KwIf,
-  LastKeyword = KwRunFor,
 
   // Everything else
   Identifier,
