@@ -1,9 +1,7 @@
 use std::fmt;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::str;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SourceLoc {
     row: i32,
     col: i32,
@@ -19,6 +17,9 @@ const SL_BEGIN: SourceLoc = SourceLoc {
 };
 
 impl SourceLoc {
+    pub fn new(row: i32, col: i32, off: usize, len: usize) -> SourceLoc {
+        SourceLoc { row, col, off, len }
+    }
     pub fn next(&mut self, ch: char) {
         if ch == '\n' {
             self.row += 1;
@@ -40,6 +41,7 @@ impl SourceLoc {
     }
 }
 
+#[derive(PartialEq, Debug)]
 pub struct LocationAnnot<T> {
     loc: SourceLoc,
     inner: T,
@@ -51,6 +53,22 @@ impl<T> LocationAnnot<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum LexErr {
+    IntOverflow(SourceLoc),
+    BadEscape(SourceLoc),
+}
+
+impl fmt::Display for LexErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IntOverflow(_) => write!(f, "Integer too large to fit in u64"),
+            Self::BadEscape(_) => write!(f, "Invalid escape sequence"),
+        }
+    }
+}
+
+#[derive(PartialEq, Debug)]
 pub enum Token {
     // Symbolic Tokens
     LParen,          // (
@@ -196,7 +214,9 @@ pub struct Lex {
     cursor: SourceLoc,
     seek: SourceLoc,
 
-    err: Option<String>,
+    err: Option<LexErr>,
+
+    mark_data: (SourceLoc, usize),
 }
 
 impl Lex {
@@ -208,6 +228,7 @@ impl Lex {
             cursor: SL_BEGIN,
             seek: SL_BEGIN,
             err: None,
+            mark_data: (SL_BEGIN, 0),
         }
     }
 
@@ -257,7 +278,7 @@ impl Lex {
         }
     }
 
-    fn lex_ident(&mut self, first: char) -> Option<AnnotTok> {
+    fn lex_ident(&mut self, first: char) -> Result<AnnotTok, LexErr> {
         self.seek.next(first);
 
         for ch in self.source[self.seek.off..].chars() {
@@ -268,25 +289,31 @@ impl Lex {
             self.seek.next(ch);
         }
 
-        Some(AnnotTok::new(
+        Ok(AnnotTok::new(
             self.cursor.to(&self.seek),
             Token::Identifier(self.source[self.cursor.off..self.seek.off].to_string()),
         ))
     }
 
-    fn lex_numlit(&mut self, first: char) -> Option<AnnotTok> {
+    fn lex_numlit(&mut self, first: char) -> Result<AnnotTok, LexErr> {
         self.seek.next(first);
 
+        let safe_accum = |val: u64, num: u64, of: bool, radix: u64| -> (u64, bool) {
+            let (val2, of_mul) = val.overflowing_mul(radix);
+            let (val3, of_add) = val2.overflowing_add(num);
+            (val3, of || of_mul || of_add)
+        };
+
+        let mut ival: u64 = 0;
+        let mut did_overflow: bool = false;
         // Instead of doing a dfa here, easier to just write this one out
         if first == '0' {
-            let mut val: u64 = 0;
             match self.peek_char() {
                 Some('x') => {
                     self.seek.next('x');
                     for ch in self.source[self.seek.off..].chars() {
                         if ch.is_ascii_hexdigit() {
-                            // TODO: overflow checks
-                            val = val * 16 + x2i(ch as u8);
+                            (ival, did_overflow) = safe_accum(ival, x2i(ch as u8), did_overflow, 16);
                         } else {
                             break;
                         }
@@ -297,8 +324,7 @@ impl Lex {
                     self.seek.next('b');
                     for ch in self.source[self.seek.off..].chars() {
                         if is_ascii_binary(ch) {
-                            // TODO: overflow checks
-                            val = val * 2 + d2i(ch as u8);
+                            (ival, did_overflow) = safe_accum(ival, d2i(ch as u8), did_overflow, 2);
                         } else {
                             break;
                         }
@@ -308,35 +334,34 @@ impl Lex {
                 Some(ch) if ch.is_ascii_digit() => {
                     for ch in self.source[self.seek.off..].chars() {
                         if is_ascii_octal(ch) {
-                            // TODO: overflow checks
-                            // TODO: overflow checks
-                            // TODO: overflow checks
-                            // TODO: overflow checks
-                            // TODO: overflow checks
-                            val = val * 8 + d2i(ch as u8);
+                            (ival, did_overflow) = safe_accum(ival, d2i(ch as u8), did_overflow, 8);
                         } else {
                             break;
                         }
                         self.seek.next(ch);
                     }
                 }
-                // Empty or non-digit means standalone 0, which val already is set with
+                // Empty or non-digit means standalone 0, which ival already is set with
                 _ => (),
             }
-            Some(AnnotTok::new(
-                self.cursor.to(&self.seek),
-                Token::IntegralLiteral(val),
-            ))
+            if did_overflow {
+                Err(LexErr::IntOverflow(self.cursor.to(&self.seek)))
+            } else {
+                Ok(AnnotTok::new(
+                    self.cursor.to(&self.seek),
+                    Token::IntegralLiteral(ival),
+                ))
+            }
         } else {
-            let mut ival: u64 = d2i(first as u8);
+            // Can't overflow on first digit
+            ival = d2i(first as u8);
             let mut has_fpart: bool = false;
             for ch in self.source[self.seek.off..].chars() {
                 if ch == '.' {
                     has_fpart = true;
                 }
                 if ch.is_ascii_digit() {
-                    // TODO: overflow checks
-                    ival = ival * 10 + d2i(ch as u8);
+                    (ival, did_overflow) = safe_accum(ival, d2i(ch as u8), did_overflow, 10);
                 } else {
                     break;
                 }
@@ -358,7 +383,7 @@ impl Lex {
                         .parse::<f32>()
                         .expect("Failed to parse well-formatted f32");
                     self.seek.next('f');
-                    Some(AnnotTok::new(
+                    Ok(AnnotTok::new(
                         self.cursor.to(&self.seek),
                         Token::FloatLiteral(fval),
                     ))
@@ -366,13 +391,15 @@ impl Lex {
                     let dval: f64 = self.source[self.cursor.off..self.seek.off]
                         .parse::<f64>()
                         .expect("Failed to parse well-formatted f64");
-                    Some(AnnotTok::new(
+                    Ok(AnnotTok::new(
                         self.cursor.to(&self.seek),
                         Token::DoubleLiteral(dval),
                     ))
                 }
+            } else if did_overflow {
+                Err(LexErr::IntOverflow(self.cursor.to(&self.seek)))
             } else {
-                Some(AnnotTok::new(
+                Ok(AnnotTok::new(
                     self.cursor.to(&self.seek),
                     Token::IntegralLiteral(ival),
                 ))
@@ -380,13 +407,15 @@ impl Lex {
         }
     }
 
-    fn lex_stringlit(&mut self) -> Option<AnnotTok> {
+    fn lex_stringlit(&mut self) -> Result<AnnotTok, LexErr> {
         self.seek.next('"');
 
         let mut str_build: Vec<u8> = Vec::new();
         let mut iter = self.source[self.seek.off..].chars();
         while let Some(ch) = iter.next() {
             if ch == '\\' {
+                let escape_start = self.seek;
+
                 self.seek.next(ch);
                 let escape = iter.next();
                 if let Some(x) = escape {
@@ -405,14 +434,22 @@ impl Lex {
                             (Some(d0), Some(d1))
                                 if d0.is_ascii_hexdigit() && d1.is_ascii_hexdigit() =>
                             {
+                                self.seek.next(d0);
+                                self.seek.next(d1);
                                 str_build.push(((x2i(d0 as u8) << 4) | x2i(d1 as u8)) as u8);
                             }
-                            // Error message needed
-                            _ => return None,
+                            (m0, m1) => {
+                                if let Some(d0) = m0 {
+                                    self.seek.next(d0);
+                                }
+                                if let Some(d1) = m1 {
+                                    self.seek.next(d1);
+                                }
+                                return Err(LexErr::BadEscape(escape_start.to(&self.seek)));
+                            }
                         }
                     }
-                    // Error message needed
-                    _ => return None,
+                    _ => return Err(LexErr::BadEscape(escape_start.to(&self.seek))),
                 }
             } else if ch == '"' {
                 self.seek.next(ch);
@@ -429,13 +466,13 @@ impl Lex {
             }
         }
 
-        Some(AnnotTok::new(
+        Ok(AnnotTok::new(
             self.cursor.to(&self.seek),
             Token::StringLiteral(str_build),
         ))
     }
 
-    fn lex_sym(&mut self, first: char) -> Option<AnnotTok> {
+    fn lex_sym(&mut self, first: char) -> Result<AnnotTok, LexErr> {
         self.seek.next(first);
 
         let tok = match first {
@@ -578,15 +615,15 @@ impl Lex {
             _ => Token::Invalid,
         };
 
-        Some(AnnotTok::new(self.cursor.to(&self.seek), tok))
+        Ok(AnnotTok::new(self.cursor.to(&self.seek), tok))
     }
 
-    fn lex_new(&mut self) -> Option<AnnotTok> {
+    fn lex_new(&mut self) -> Result<AnnotTok, LexErr> {
         self.skip_ws();
         self.cursor = self.seek;
 
         let new_tok = match self.peek_char() {
-            Option::None => Some(AnnotTok::new(self.seek, Token::Eof)),
+            Option::None => Ok(AnnotTok::new(self.seek, Token::Eof)),
             Option::Some(ch) if ch.is_alphabetic() || ch == '_' => self.lex_ident(ch),
             Option::Some(ch) if ch.is_ascii_digit() => self.lex_numlit(ch),
             Option::Some('"') => self.lex_stringlit(),
@@ -597,20 +634,37 @@ impl Lex {
         new_tok
     }
 
-    pub fn peek(&mut self) -> Option<&AnnotTok> {
-        if self.head_loc == self.peek_buf.len() {
-            if let Some(tok) = self.lex_new() {
-                self.peek_buf.push(tok);
-            } else {
-                self.err = Some(String::from("TODO: Failure reason"));
-                return None;
+    pub fn peek(&mut self) -> Result<&AnnotTok, LexErr> {
+        if let Some(e) = self.err {
+            return Err(e);
+        }
+
+        // Catch the peek buffer up to the head pointer
+        while self.head_loc >= self.peek_buf.len() {
+            // Doing this to stash the error (instead of ?)
+            match self.lex_new() {
+                Ok(tok) => self.peek_buf.push(tok),
+                Err(err) => {
+                    self.err = Some(err);
+                    return Err(err);
+                },
             }
         }
-        Some(&self.peek_buf[self.head_loc])
+        Ok(&self.peek_buf[self.head_loc])
     }
 
     pub fn eat(&mut self) {
+        // Lazily move the head pointer forward
         self.head_loc += 1;
+    }
+
+    pub fn mark(&mut self) {
+        self.mark_data = (self.cursor, self.head_loc);
+    }
+
+    pub fn rewind(&mut self) {
+        (self.cursor, self.head_loc) = self.mark_data;
+        self.seek = self.cursor;
     }
 }
 
@@ -642,51 +696,75 @@ fn is_ascii_binary(ch: char) -> bool {
 mod tests {
     use super::*;
 
-    fn is_id(tok: &Token, expect_id: &str) -> bool {
-        if let Token::Identifier(id) = tok {
-            expect_id == id
-        } else {
-            false
-        }
-    }
-
-    fn same_tok(a: &Token, b: Token) -> bool {
-        std::mem::discriminant(a) == std::mem::discriminant(&b)
-    }
-
-    fn is_int(a: &Token, expect_val: u64) -> bool {
-        if let Token::IntegralLiteral(val) = a {
-            expect_val == *val
-        } else {
-            false
+    #[test]
+    fn test_basic() {
+        let mut lexer = Lex::new(String::from(
+            "token   another\ntoken+=+352 010 0b1110110 and  0x1f",
+        ));
+        let expect_list = [
+            AnnotTok::new(SourceLoc::new(1, 1, 0, 5), Token::Identifier(String::from("token"))),
+            AnnotTok::new(SourceLoc::new(1, 9, 8, 7), Token::Identifier(String::from("another"))),
+            AnnotTok::new(SourceLoc::new(2, 1, 16, 5), Token::Identifier(String::from("token"))),
+            AnnotTok::new(SourceLoc::new(2, 6, 21, 2), Token::PlusEqual),
+            AnnotTok::new(SourceLoc::new(2, 8, 23, 1), Token::Plus),
+            AnnotTok::new(SourceLoc::new(2, 9, 24, 3), Token::IntegralLiteral(352)),
+            AnnotTok::new(SourceLoc::new(2, 13, 28, 3), Token::IntegralLiteral(0o10)),
+            AnnotTok::new(SourceLoc::new(2, 17, 32, 9), Token::IntegralLiteral(0b1110110)),
+            AnnotTok::new(SourceLoc::new(2, 27, 42, 3), Token::Identifier(String::from("and"))),
+            AnnotTok::new(SourceLoc::new(2, 32, 47, 4), Token::IntegralLiteral(0x1f)),
+            AnnotTok::new(SourceLoc::new(2, 36, 51, 0), Token::Eof),
+        ];
+        for expect in &expect_list {
+            let actual = lexer.peek().expect("Failed to parse token");
+            assert_eq!(expect, actual);
+            lexer.eat();
         }
     }
 
     #[test]
-    fn test_lex() {
-        let mut lexer = Lex::new(String::from("token   another\ntoken+=+352 010 0b1110110 and  0x1f"));
-        assert!(is_id(&lexer.peek().expect("Valid token").inner, "token"));
-        lexer.eat();
-        assert!(is_id(&lexer.peek().expect("Valid token").inner, "another"));
-        lexer.eat();
-        assert!(is_id(&lexer.peek().expect("Valid token").inner, "token"));
-        lexer.eat();
-        assert!(same_tok(&lexer.peek().expect("Valid token").inner, Token::PlusEqual));
-        lexer.eat();
-        assert!(same_tok(&lexer.peek().expect("Valid token").inner, Token::Plus));
-        lexer.eat();
-        assert!(is_int(&lexer.peek().expect("Valid token").inner, 352));
-        lexer.eat();
-        assert!(is_int(&lexer.peek().expect("Valid token").inner, 0o10));
-        lexer.eat();
-        assert!(is_int(&lexer.peek().expect("Valid token").inner, 0b1110110));
-        lexer.eat();
-        assert!(is_id(&lexer.peek().expect("Valid token").inner, "and"));
-        lexer.eat();
-        assert!(is_int(&lexer.peek().expect("Valid token").inner, 0x1f));
-        lexer.eat();
-        assert!(same_tok(&lexer.peek().expect("Valid token").inner, Token::Eof));
-        lexer.eat();
-        assert!(same_tok(&lexer.peek().expect("Valid token").inner, Token::Eof));
+    fn test_string() {
+        let mut lexer = Lex::new(String::from(
+            "\"this is a string\"\n\
+             \"now with \\n some escapes\"\n\
+             \"\\\\\\n\\r\\t\\0\\\"\"\n\
+             \"before\\x00\\x01\\xff\\x80\\x45\\x95\\xeeafter\""
+        ));
+        let expect_list = [
+            AnnotTok::new(SourceLoc::new(1, 1, 0, 18),
+                Token::StringLiteral(Vec::from(b"this is a string"))),
+            AnnotTok::new(SourceLoc::new(2, 1, 19, 26),
+                Token::StringLiteral(Vec::from(b"now with \n some escapes"))),
+            AnnotTok::new(SourceLoc::new(3, 1, 19+27, 14),
+                Token::StringLiteral(Vec::from(b"\\\n\r\t\0\""))),
+            AnnotTok::new(SourceLoc::new(4, 1, 19+27+15, 41),
+                Token::StringLiteral(Vec::from(b"before\x00\x01\xff\x80\x45\x95\xeeafter"))),
+            AnnotTok::new(SourceLoc::new(4, 42, 19+27+15+41, 0), Token::Eof)
+        ];
+
+        for expect in &expect_list {
+            let actual = lexer.peek().expect("Failed to parse token");
+            assert_eq!(expect, actual);
+            lexer.eat();
+        }
+    }
+
+    #[test]
+    fn test_comments() {
+        let mut lexer = Lex::new(String::from(
+                "before//after\n1//2\na //\n\"str//a\"//\n"
+        ));
+        let expect_list = [
+            AnnotTok::new(SourceLoc::new(1, 1, 0, 6), Token::Identifier(String::from("before"))),
+            AnnotTok::new(SourceLoc::new(2, 1, 14, 1), Token::IntegralLiteral(1)),
+            AnnotTok::new(SourceLoc::new(3, 1, 19, 1), Token::Identifier(String::from("a"))),
+            AnnotTok::new(SourceLoc::new(4, 1, 24, 8), Token::StringLiteral(Vec::from(b"str//a"))),
+            AnnotTok::new(SourceLoc::new(5, 1, 35, 0), Token::Eof)
+        ];
+
+        for expect in &expect_list {
+            let actual = lexer.peek().expect("Failed to parse token");
+            assert_eq!(expect, actual);
+            lexer.eat();
+        }
     }
 }
