@@ -1,74 +1,9 @@
 use std::fmt;
 use std::str;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SourceLoc {
-    row: i32,
-    col: i32,
-    off: usize,
-    len: usize,
-}
+use crate::compile::{SourceLoc, LocationAnnot, SL_BEGIN, CompileErr};
 
-const SL_BEGIN: SourceLoc = SourceLoc {
-    row: 1,
-    col: 1,
-    off: 0,
-    len: 0,
-};
-
-impl SourceLoc {
-    pub fn new(row: i32, col: i32, off: usize, len: usize) -> SourceLoc {
-        SourceLoc { row, col, off, len }
-    }
-    pub fn next(&mut self, ch: char) {
-        if ch == '\n' {
-            self.row += 1;
-            self.col = 1;
-        } else {
-            self.col += 1;
-        }
-
-        self.off += ch.len_utf8();
-    }
-
-    pub fn to(&self, end: &SourceLoc) -> SourceLoc {
-        SourceLoc {
-            row: self.row,
-            col: self.col,
-            off: self.off,
-            len: end.off - self.off,
-        }
-    }
-}
-
-#[derive(PartialEq, Debug)]
-pub struct LocationAnnot<T> {
-    loc: SourceLoc,
-    inner: T,
-}
-
-impl<T> LocationAnnot<T> {
-    pub fn new(loc: SourceLoc, inner: T) -> Self {
-        Self { loc, inner }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum LexErr {
-    IntOverflow(SourceLoc),
-    BadEscape(SourceLoc),
-}
-
-impl fmt::Display for LexErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::IntOverflow(_) => write!(f, "Integer too large to fit in u64"),
-            Self::BadEscape(_) => write!(f, "Invalid escape sequence"),
-        }
-    }
-}
-
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Token {
     // Symbolic Tokens
     LParen,          // (
@@ -203,7 +138,16 @@ impl fmt::Display for Token {
     }
 }
 
-type AnnotTok = LocationAnnot<Token>;
+pub type AnnotTok = LocationAnnot<Token>;
+
+impl Clone for AnnotTok {
+    fn clone(&self) -> AnnotTok {
+        AnnotTok {
+            loc: self.loc,
+            inner: self.inner.clone(),
+        }
+    }
+}
 
 pub struct Lex {
     source: String,
@@ -214,7 +158,7 @@ pub struct Lex {
     cursor: SourceLoc,
     seek: SourceLoc,
 
-    err: Option<LexErr>,
+    err: Option<CompileErr>,
 
     mark_data: (SourceLoc, usize),
 }
@@ -278,7 +222,7 @@ impl Lex {
         }
     }
 
-    fn lex_ident(&mut self, first: char) -> Result<AnnotTok, LexErr> {
+    fn lex_ident(&mut self, first: char) -> Result<AnnotTok, CompileErr> {
         self.seek.next(first);
 
         for ch in self.source[self.seek.off..].chars() {
@@ -295,7 +239,7 @@ impl Lex {
         ))
     }
 
-    fn lex_numlit(&mut self, first: char) -> Result<AnnotTok, LexErr> {
+    fn lex_numlit(&mut self, first: char) -> Result<AnnotTok, CompileErr> {
         self.seek.next(first);
 
         let safe_accum = |val: u64, num: u64, of: bool, radix: u64| -> (u64, bool) {
@@ -313,7 +257,8 @@ impl Lex {
                     self.seek.next('x');
                     for ch in self.source[self.seek.off..].chars() {
                         if ch.is_ascii_hexdigit() {
-                            (ival, did_overflow) = safe_accum(ival, x2i(ch as u8), did_overflow, 16);
+                            (ival, did_overflow) =
+                                safe_accum(ival, x2i(ch as u8), did_overflow, 16);
                         } else {
                             break;
                         }
@@ -345,7 +290,7 @@ impl Lex {
                 _ => (),
             }
             if did_overflow {
-                Err(LexErr::IntOverflow(self.cursor.to(&self.seek)))
+                Err(CompileErr::IntOverflow(self.cursor.to(&self.seek)))
             } else {
                 Ok(AnnotTok::new(
                     self.cursor.to(&self.seek),
@@ -397,7 +342,7 @@ impl Lex {
                     ))
                 }
             } else if did_overflow {
-                Err(LexErr::IntOverflow(self.cursor.to(&self.seek)))
+                Err(CompileErr::IntOverflow(self.cursor.to(&self.seek)))
             } else {
                 Ok(AnnotTok::new(
                     self.cursor.to(&self.seek),
@@ -407,7 +352,7 @@ impl Lex {
         }
     }
 
-    fn lex_stringlit(&mut self) -> Result<AnnotTok, LexErr> {
+    fn lex_stringlit(&mut self) -> Result<AnnotTok, CompileErr> {
         self.seek.next('"');
 
         let mut str_build: Vec<u8> = Vec::new();
@@ -429,27 +374,25 @@ impl Lex {
                     Some('t') => str_build.push(b'\t'),
                     Some('0') => str_build.push(b'\0'),
                     Some('"') => str_build.push(b'"'),
-                    Some('x') => {
-                        match (iter.next(), iter.next()) {
-                            (Some(d0), Some(d1))
-                                if d0.is_ascii_hexdigit() && d1.is_ascii_hexdigit() =>
-                            {
-                                self.seek.next(d0);
-                                self.seek.next(d1);
-                                str_build.push(((x2i(d0 as u8) << 4) | x2i(d1 as u8)) as u8);
-                            }
-                            (m0, m1) => {
-                                if let Some(d0) = m0 {
-                                    self.seek.next(d0);
-                                }
-                                if let Some(d1) = m1 {
-                                    self.seek.next(d1);
-                                }
-                                return Err(LexErr::BadEscape(escape_start.to(&self.seek)));
-                            }
+                    Some('x') => match (iter.next(), iter.next()) {
+                        (Some(d0), Some(d1))
+                            if d0.is_ascii_hexdigit() && d1.is_ascii_hexdigit() =>
+                        {
+                            self.seek.next(d0);
+                            self.seek.next(d1);
+                            str_build.push(((x2i(d0 as u8) << 4) | x2i(d1 as u8)) as u8);
                         }
-                    }
-                    _ => return Err(LexErr::BadEscape(escape_start.to(&self.seek))),
+                        (m0, m1) => {
+                            if let Some(d0) = m0 {
+                                self.seek.next(d0);
+                            }
+                            if let Some(d1) = m1 {
+                                self.seek.next(d1);
+                            }
+                            return Err(CompileErr::BadEscape(escape_start.to(&self.seek)));
+                        }
+                    },
+                    _ => return Err(CompileErr::BadEscape(escape_start.to(&self.seek))),
                 }
             } else if ch == '"' {
                 self.seek.next(ch);
@@ -472,7 +415,7 @@ impl Lex {
         ))
     }
 
-    fn lex_sym(&mut self, first: char) -> Result<AnnotTok, LexErr> {
+    fn lex_sym(&mut self, first: char) -> Result<AnnotTok, CompileErr> {
         self.seek.next(first);
 
         let tok = match first {
@@ -618,7 +561,7 @@ impl Lex {
         Ok(AnnotTok::new(self.cursor.to(&self.seek), tok))
     }
 
-    fn lex_new(&mut self) -> Result<AnnotTok, LexErr> {
+    fn lex_new(&mut self) -> Result<AnnotTok, CompileErr> {
         self.skip_ws();
         self.cursor = self.seek;
 
@@ -634,9 +577,9 @@ impl Lex {
         new_tok
     }
 
-    pub fn peek(&mut self) -> Result<&AnnotTok, LexErr> {
-        if let Some(e) = self.err {
-            return Err(e);
+    pub fn peek(&mut self) -> Result<&AnnotTok, CompileErr> {
+        if let Some(e) = &self.err {
+            return Err(e.clone());
         }
 
         // Catch the peek buffer up to the head pointer
@@ -645,9 +588,10 @@ impl Lex {
             match self.lex_new() {
                 Ok(tok) => self.peek_buf.push(tok),
                 Err(err) => {
+                    let ret = Err(err.clone());
                     self.err = Some(err);
-                    return Err(err);
-                },
+                    return ret;
+                }
             }
         }
         Ok(&self.peek_buf[self.head_loc])
@@ -702,15 +646,30 @@ mod tests {
             "token   another\ntoken+=+352 010 0b1110110 and  0x1f",
         ));
         let expect_list = [
-            AnnotTok::new(SourceLoc::new(1, 1, 0, 5), Token::Identifier(String::from("token"))),
-            AnnotTok::new(SourceLoc::new(1, 9, 8, 7), Token::Identifier(String::from("another"))),
-            AnnotTok::new(SourceLoc::new(2, 1, 16, 5), Token::Identifier(String::from("token"))),
+            AnnotTok::new(
+                SourceLoc::new(1, 1, 0, 5),
+                Token::Identifier(String::from("token")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(1, 9, 8, 7),
+                Token::Identifier(String::from("another")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(2, 1, 16, 5),
+                Token::Identifier(String::from("token")),
+            ),
             AnnotTok::new(SourceLoc::new(2, 6, 21, 2), Token::PlusEqual),
             AnnotTok::new(SourceLoc::new(2, 8, 23, 1), Token::Plus),
             AnnotTok::new(SourceLoc::new(2, 9, 24, 3), Token::IntegralLiteral(352)),
             AnnotTok::new(SourceLoc::new(2, 13, 28, 3), Token::IntegralLiteral(0o10)),
-            AnnotTok::new(SourceLoc::new(2, 17, 32, 9), Token::IntegralLiteral(0b1110110)),
-            AnnotTok::new(SourceLoc::new(2, 27, 42, 3), Token::Identifier(String::from("and"))),
+            AnnotTok::new(
+                SourceLoc::new(2, 17, 32, 9),
+                Token::IntegralLiteral(0b1110110),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(2, 27, 42, 3),
+                Token::Identifier(String::from("and")),
+            ),
             AnnotTok::new(SourceLoc::new(2, 32, 47, 4), Token::IntegralLiteral(0x1f)),
             AnnotTok::new(SourceLoc::new(2, 36, 51, 0), Token::Eof),
         ];
@@ -727,18 +686,26 @@ mod tests {
             "\"this is a string\"\n\
              \"now with \\n some escapes\"\n\
              \"\\\\\\n\\r\\t\\0\\\"\"\n\
-             \"before\\x00\\x01\\xff\\x80\\x45\\x95\\xeeafter\""
+             \"before\\x00\\x01\\xff\\x80\\x45\\x95\\xeeafter\"",
         ));
         let expect_list = [
-            AnnotTok::new(SourceLoc::new(1, 1, 0, 18),
-                Token::StringLiteral(Vec::from(b"this is a string"))),
-            AnnotTok::new(SourceLoc::new(2, 1, 19, 26),
-                Token::StringLiteral(Vec::from(b"now with \n some escapes"))),
-            AnnotTok::new(SourceLoc::new(3, 1, 19+27, 14),
-                Token::StringLiteral(Vec::from(b"\\\n\r\t\0\""))),
-            AnnotTok::new(SourceLoc::new(4, 1, 19+27+15, 41),
-                Token::StringLiteral(Vec::from(b"before\x00\x01\xff\x80\x45\x95\xeeafter"))),
-            AnnotTok::new(SourceLoc::new(4, 42, 19+27+15+41, 0), Token::Eof)
+            AnnotTok::new(
+                SourceLoc::new(1, 1, 0, 18),
+                Token::StringLiteral(Vec::from(b"this is a string")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(2, 1, 19, 26),
+                Token::StringLiteral(Vec::from(b"now with \n some escapes")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(3, 1, 19 + 27, 14),
+                Token::StringLiteral(Vec::from(b"\\\n\r\t\0\"")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(4, 1, 19 + 27 + 15, 41),
+                Token::StringLiteral(Vec::from(b"before\x00\x01\xff\x80\x45\x95\xeeafter")),
+            ),
+            AnnotTok::new(SourceLoc::new(4, 42, 19 + 27 + 15 + 41, 0), Token::Eof),
         ];
 
         for expect in &expect_list {
@@ -750,15 +717,22 @@ mod tests {
 
     #[test]
     fn test_comments() {
-        let mut lexer = Lex::new(String::from(
-                "before//after\n1//2\na //\n\"str//a\"//\n"
-        ));
+        let mut lexer = Lex::new(String::from("before//after\n1//2\na //\n\"str//a\"//\n"));
         let expect_list = [
-            AnnotTok::new(SourceLoc::new(1, 1, 0, 6), Token::Identifier(String::from("before"))),
+            AnnotTok::new(
+                SourceLoc::new(1, 1, 0, 6),
+                Token::Identifier(String::from("before")),
+            ),
             AnnotTok::new(SourceLoc::new(2, 1, 14, 1), Token::IntegralLiteral(1)),
-            AnnotTok::new(SourceLoc::new(3, 1, 19, 1), Token::Identifier(String::from("a"))),
-            AnnotTok::new(SourceLoc::new(4, 1, 24, 8), Token::StringLiteral(Vec::from(b"str//a"))),
-            AnnotTok::new(SourceLoc::new(5, 1, 35, 0), Token::Eof)
+            AnnotTok::new(
+                SourceLoc::new(3, 1, 19, 1),
+                Token::Identifier(String::from("a")),
+            ),
+            AnnotTok::new(
+                SourceLoc::new(4, 1, 24, 8),
+                Token::StringLiteral(Vec::from(b"str//a")),
+            ),
+            AnnotTok::new(SourceLoc::new(5, 1, 35, 0), Token::Eof),
         ];
 
         for expect in &expect_list {

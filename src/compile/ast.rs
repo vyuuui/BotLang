@@ -1,4 +1,4 @@
-use crate::compile::lex::{SourceLoc, LocationAnnot};
+use crate::compile::LocationAnnot;
 
 pub struct Script {
     imports: Vec<LocationAnnot<String>>,
