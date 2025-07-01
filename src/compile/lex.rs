@@ -1,9 +1,12 @@
 use std::fmt;
 use std::str;
+use strum_macros::{EnumDiscriminants, Display};
 
 use crate::compile::{SourceLoc, LocationAnnot, SL_BEGIN, CompileErr};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, EnumDiscriminants)]
+#[strum_discriminants(derive(Display))]
+#[strum_discriminants(vis(pub))]
 pub enum Token {
     // Symbolic Tokens
     LParen,          // (

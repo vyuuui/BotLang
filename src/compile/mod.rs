@@ -8,7 +8,8 @@ pub mod parsec;
 pub enum CompileErr {
     IntOverflow(SourceLoc),
     BadEscape(SourceLoc),
-    Mismatch(lex::Token, lex::Token, SourceLoc),
+    ValMismatch(lex::Token, lex::Token, SourceLoc),
+    TypeMismatch(lex::TokenDiscriminants, lex::Token, SourceLoc),
 }
 
 impl fmt::Display for CompileErr {
@@ -16,7 +17,8 @@ impl fmt::Display for CompileErr {
         match self {
             Self::IntOverflow(_) => write!(f, "Integer too large to fit in u64"),
             Self::BadEscape(_) => write!(f, "Invalid escape sequence"),
-            Self::Mismatch(e, a, _) => write!(f, "Expected token {} but got {}", e, a),
+            Self::ValMismatch(e, a, _) => write!(f, "Expected token {} but got {}", e, a),
+            Self::TypeMismatch(e, a, _) => write!(f, "Expected token {} but got {}", e, a),
         }
     }
 }
