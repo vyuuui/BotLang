@@ -1,12 +1,13 @@
 use crate::compile::LocationAnnot;
 
+#[derive(Default)]
 pub struct Script {
-    imports: Vec<LocationAnnot<String>>,
-    funcs: Vec<FuncDef>,
-    behaviors: Vec<BehaviorDef>,
-    enums: Vec<EnumerationDef>,
-    externs: Vec<FuncDecl>,
-    interfaces: Vec<InterfaceDef>,
+    pub imports: Vec<LocationAnnot<String>>,
+    pub funcs: Vec<FuncDef>,
+    pub behaviors: Vec<BehaviorDef>,
+    pub enums: Vec<EnumerationDef>,
+    pub externs: Vec<FuncDecl>,
+    pub interfaces: Vec<InterfaceDef>,
 }
 
 
@@ -29,6 +30,7 @@ pub enum Literal {
 ///////////
 // Types //
 ///////////
+#[derive(PartialEq, Eq, Debug)]
 pub enum BaseType {
     Int8,
     Int16,
@@ -50,12 +52,14 @@ pub enum BaseType {
     NonPrim(String),
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum TypeKind {
     List(bool),
     Maybe(bool),
     View(bool),
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct FullType {
     kind: Vec<TypeKind>,
     base: BaseType,
@@ -189,10 +193,11 @@ pub struct BehaviorDef {
 //////////////////
 // Enumerations //
 //////////////////
+#[derive(PartialEq, Debug)]
 pub struct EnumerationDef {
-    name: LocationAnnot<String>,
-    tp: LocationAnnot<BaseType>,
-    ents: Vec<(LocationAnnot<String>, LocationAnnot<u64>)>
+    pub name: LocationAnnot<String>,
+    pub tp: LocationAnnot<BaseType>,
+    pub ents: Vec<(LocationAnnot<String>, LocationAnnot<u64>)>
 }
 
 

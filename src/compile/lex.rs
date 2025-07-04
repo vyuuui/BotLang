@@ -158,7 +158,7 @@ pub struct Lex {
     peek_buf: Vec<AnnotTok>,
     head_loc: usize,
 
-    cursor: SourceLoc,
+    pub cursor: SourceLoc,
     seek: SourceLoc,
 
     err: Option<CompileErr>,
