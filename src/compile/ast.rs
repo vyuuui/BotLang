@@ -61,16 +61,16 @@ pub enum TypeKind {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct FullType {
-    kind: Vec<(TypeKind, bool)>,
-    base: BaseType,
+    pub kind: Vec<(TypeKind, bool)>,
+    pub base: (BaseType, bool),
 }
 
 /////////////////////
 // Procedural lang //
 /////////////////////
 pub struct Var {
-    name: LocationAnnot<String>,
-    tp: LocationAnnot<FullType>,
+    pub name: LocationAnnot<String>,
+    pub tp: LocationAnnot<FullType>,
 }
 
 type AnnotPSyn = LocationAnnot<Box<PSyn>>;
@@ -155,10 +155,10 @@ pub enum PSyn {
 }
 
 pub struct FuncDef {
-    name: LocationAnnot<String>,
-    params: Vec<Var>,
-    rtp: LocationAnnot<FullType>,
-    body: AnnotPSyn,
+    pub name: LocationAnnot<String>,
+    pub params: Vec<Var>,
+    pub rtp: LocationAnnot<FullType>,
+    pub body: AnnotPSyn,
 }
 
 
@@ -205,9 +205,9 @@ pub struct EnumerationDef {
 // Externs //
 /////////////
 pub struct FuncDecl {
-    name: LocationAnnot<String>,
-    params: Vec<Var>,
-    rtp: LocationAnnot<FullType>,
+    pub name: LocationAnnot<String>,
+    pub params: Vec<Var>,
+    pub rtp: LocationAnnot<FullType>,
 }
 
 

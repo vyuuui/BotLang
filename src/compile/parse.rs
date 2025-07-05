@@ -1,8 +1,8 @@
 use crate::compile::ast::*;
 use crate::compile::lex::{Lex, Token, TokenDiscriminants};
 use crate::compile::parsec::{
-    cvt, epsilon, extid, extint, icl, ifx, inv, mat, maybe, pfx, rep, seql, seqlr, seqr, withannot,
-    Parser, ToOneOf,
+    cvt, cvt_witherr, epsilon, extid, extint, icl, ifx, inv, mat, maybe, pfx, rep, seql, seqlr,
+    seqr, withannot, Parser, ToOneOf,
 };
 use crate::compile::{annot, CompileErr, LocationAnnot, SourceLoc, SL_NIL};
 use std::cmp::Ordering;
@@ -38,7 +38,7 @@ pub fn parse(script: String) -> Result<Script, CompileErr> {
             Token::Identifier(i) if i == "fn" => {}
             Token::Identifier(i) if i == "extern" => {
                 lexer.eat();
-                //                res.funcs.push(parse_func_decl(&mut lexer)?);
+                res.externs.push(parse_func_decl(&mut lexer)?);
             }
             _ => return Err(CompileErr::Message("Expected valid top-level definition")),
         }
@@ -162,42 +162,96 @@ fn parse_enum(lexer: &mut Lex) -> Result<EnumerationDef, CompileErr> {
     Ok(ret)
 }
 
-//fn parse_fulltype(lexer: &mut Lex) -> Result<LocationAnnot<FullType>, CompileErr> {
-//    let res = rep(cvt(
-//        |(a, b)| {},
-//        seqlr(
-//            (
-//                cvt(
-//                    |_| TypeKind::List,
-//                    mat(Token::Identifier(String::from("list"))),
-//                ),
-//                cvt(
-//                    |_| TypeKind::Maybe,
-//                    mat(Token::Identifier(String::from("maybe"))),
-//                ),
-//                cvt(
-//                    |_| TypeKind::View,
-//                    mat(Token::Identifier(String::from("view"))),
-//                ),
-//            )
-//                .oneof(),
-//            maybe(Token::Ampersand, epsilon()),
-//        ),
-//    ))
-//    .parse(lexer);
-//}
-//
-//fn parse_param_list(lexer: &mut Lex) -> Result<LocationAnnot<Vec<Var>>, CompileErr> {
-//    seqlr(extid(), seqr(mat(Token::Colon), inv(parse_fulltype)));
-//}
-//
-//fn parse_func_decl(lexer: &mut Lex) -> Result<FuncDecl, CompileErr> {
-//    let nm = extid().parse(lexer);
-//    let params = seql(
-//        seqr(mat(Token::LParen), inv(parse_param_list)),
-//        mat(Token::RParen),
-//    );
-//}
+fn parse_fulltype(lexer: &mut Lex) -> Result<FullType, CompileErr> {
+    let basetype_id = |tn: String| -> BaseType {
+        match tn.as_str() {
+            "i8" => BaseType::Int8,
+            "i16" => BaseType::Int16,
+            "i32" => BaseType::Int32,
+            "i64" => BaseType::Int64,
+            "u8" => BaseType::UInt8,
+            "u16" => BaseType::UInt16,
+            "u32" => BaseType::UInt32,
+            "u64" => BaseType::UInt64,
+            "bool" => BaseType::Bool,
+            "float" => BaseType::Flt,
+            "double" => BaseType::Dbl,
+            "vec2" => BaseType::Vec2,
+            "vec3" => BaseType::Vec3,
+            "string" => BaseType::Str,
+            "range" => BaseType::Range,
+            "STATUS" => BaseType::Status,
+            _ => BaseType::NonPrim(tn),
+        }
+    };
+    let kind = rep(seqlr(
+        (
+            cvt(
+                |_| TypeKind::List,
+                mat(Token::Identifier(String::from("list"))),
+            ),
+            cvt(
+                |_| TypeKind::Maybe,
+                mat(Token::Identifier(String::from("maybe"))),
+            ),
+            cvt(
+                |_| TypeKind::View,
+                mat(Token::Identifier(String::from("view"))),
+            ),
+        )
+            .oneof(),
+        cvt(|m| m.is_some(), maybe(Token::Ampersand, epsilon())),
+    ))
+    .parse(lexer)?;
+
+    let base = seqlr(
+        (
+            // TODO: check for errors if basetype overlaps with keywords
+            cvt(basetype_id, extid()),
+            cvt(
+                BaseType::Callable,
+                seql(
+                    seqr(mat(Token::LParen), icl(inv(parse_fulltype), Token::Arrow)),
+                    mat(Token::RParen),
+                ),
+            ),
+        )
+            .oneof(),
+        cvt(|m| m.is_some(), maybe(Token::Ampersand, epsilon())),
+    )
+    .parse(lexer)?;
+
+    Ok(FullType { kind, base })
+}
+
+fn parse_param_list(lexer: &mut Lex) -> Result<Vec<Var>, CompileErr> {
+    icl(
+        cvt(
+            |(name, tp)| Var { name, tp },
+            seqlr(
+                withannot(extid()),
+                seqr(mat(Token::Colon), withannot(inv(parse_fulltype))),
+            ),
+        ),
+        Token::Comma,
+    )
+    .parse(lexer)
+}
+
+fn parse_func_decl(lexer: &mut Lex) -> Result<FuncDecl, CompileErr> {
+    let (name, params) = seqlr(
+        withannot(extid()),
+        seql(
+            seqr(mat(Token::LParen), inv(parse_param_list)),
+            mat(Token::RParen),
+        ),
+    )
+    .parse(lexer)?;
+
+    let rtp = seqr(mat(Token::Arrow), withannot(inv(parse_fulltype))).parse(lexer)?;
+
+    Ok(FuncDecl { name, params, rtp })
+}
 
 #[cfg(test)]
 mod tests {
@@ -223,6 +277,44 @@ mod tests {
             ),
             _ => (),
         }
+    }
+
+    #[test]
+    fn test_fulltype() {
+        assert_eq!(
+            parse_fulltype(&mut Lex::new(String::from(r"maybe list& i8&"))).expect("Parse failed"),
+            FullType {
+                kind: vec![(TypeKind::Maybe, false), (TypeKind::List, true)],
+                base: (BaseType::Int8, true),
+            }
+        );
+
+        assert_eq!(
+            parse_fulltype(&mut Lex::new(String::from(
+                r"(maybe list i8 -> float -> bool)"
+            )))
+            .expect("Parse failed"),
+            FullType {
+                kind: vec![],
+                base: (
+                    BaseType::Callable(vec![
+                        FullType {
+                            kind: vec![(TypeKind::Maybe, false), (TypeKind::List, false)],
+                            base: (BaseType::Int8, false),
+                        },
+                        FullType {
+                            kind: vec![],
+                            base: (BaseType::Flt, false),
+                        },
+                        FullType {
+                            kind: vec![],
+                            base: (BaseType::Bool, false),
+                        }
+                    ]),
+                    false
+                ),
+            }
+        );
     }
 
     #[test]

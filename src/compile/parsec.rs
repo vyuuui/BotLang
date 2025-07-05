@@ -74,6 +74,23 @@ impl<In, Out, P: Parser<In>> Parser<Out> for Convert<In, Out, P> {
     }
 }
 
+pub struct ConvertWithErr<In, Out, P: Parser<In>> {
+    sub: P,
+    f: fn(In) -> Result<Out, CompileErr>,
+}
+
+impl<In, Out, P: Parser<In>> Parser<Out> for ConvertWithErr<In, Out, P> {
+    const SKIP: bool = P::SKIP;
+
+    fn ll1(&self, l: &mut Lex) -> Result<bool, CompileErr> {
+        self.sub.ll1(l)
+    }
+
+    fn parse(&self, l: &mut Lex) -> Result<Out, CompileErr> {
+        self.sub.parse(l).and_then(self.f)
+    }
+}
+
 pub struct Match<Out> {
     t: Token,
     marker: PhantomData<Out>,
@@ -405,6 +422,13 @@ pub fn inv<Out>(f: fn(&mut Lex) -> Result<Out, CompileErr>) -> Invoke<Out> {
 
 pub fn cvt<In, Out, P: Parser<In>>(f: fn(In) -> Out, sub: P) -> Convert<In, Out, P> {
     Convert { f, sub }
+}
+
+pub fn cvt_witherr<In, Out, P: Parser<In>>(
+    f: fn(In) -> Result<Out, CompileErr>,
+    sub: P,
+) -> ConvertWithErr<In, Out, P> {
+    ConvertWithErr { f, sub }
 }
 
 pub fn mat(tok: Token) -> Match<()> {
