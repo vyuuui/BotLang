@@ -80,38 +80,45 @@ impl SourceLoc {
     }
 
     pub fn to(&self, end: &SourceLoc) -> SourceLoc {
-        SourceLoc {
-            row: self.row,
-            col: self.col,
-            off: self.off,
-            len: end.off - self.off,
-        }
-    }
-
-    pub fn union(&self, other: &SourceLoc) -> SourceLoc {
-        let left = if self.off < other.off { self } else { other };
-        SourceLoc {
-            row: left.row,
-            col: left.col,
-            off: left.off,
-            len: std::cmp::max(self.off + self.len, other.off + other.len) - left.off,
-        }
-    }
-
-    pub fn accum(&mut self, other: &SourceLoc) {
-        if other.off == usize::MAX {
-        } else if self.off == usize::MAX {
-            *self = *other;
+        if self.off == usize::MAX || end.off == usize::MAX {
+            SL_NIL
         } else {
-            let rightmost = std::cmp::max(self.off + self.len, other.off + other.len);
-            if self.off > other.off {
-                self.row = other.row;
-                self.col = other.col;
-                self.off = other.off;
+            SourceLoc {
+                row: self.row,
+                col: self.col,
+                off: self.off,
+                len: end.off - self.off,
             }
-            self.len = rightmost - self.off;
         }
     }
+
+    pub fn to_right(&self, end: &SourceLoc) -> SourceLoc {
+        if self.off == usize::MAX || end.off == usize::MAX {
+            SL_NIL
+        } else {
+            SourceLoc {
+                row: self.row,
+                col: self.col,
+                off: self.off,
+                len: end.off + end.len - self.off,
+            }
+        }
+    }
+
+    //pub fn accum(&mut self, other: &SourceLoc) {
+    //    if other.off == usize::MAX {
+    //    } else if self.off == usize::MAX {
+    //        *self = *other;
+    //    } else {
+    //        let rightmost = std::cmp::max(self.off + self.len, other.off + other.len);
+    //        if self.off > other.off {
+    //            self.row = other.row;
+    //            self.col = other.col;
+    //            self.off = other.off;
+    //        }
+    //        self.len = rightmost - self.off;
+    //    }
+    //}
 }
 
 #[derive(PartialEq, Debug)]

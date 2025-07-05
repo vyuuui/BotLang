@@ -2,7 +2,7 @@ use std::fmt;
 use std::str;
 use strum_macros::{EnumDiscriminants, Display};
 
-use crate::compile::{SourceLoc, LocationAnnot, SL_BEGIN, CompileErr};
+use crate::compile::{SourceLoc, LocationAnnot, SL_BEGIN, SL_NIL, CompileErr};
 
 #[derive(Clone, PartialEq, Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(Display))]
@@ -156,9 +156,9 @@ pub struct Lex {
     source: String,
 
     peek_buf: Vec<AnnotTok>,
-    head_loc: usize,
+    head_idx: usize,
 
-    pub cursor: SourceLoc,
+    cursor: SourceLoc,
     seek: SourceLoc,
 
     err: Option<CompileErr>,
@@ -171,7 +171,7 @@ impl Lex {
         Self {
             source,
             peek_buf: Vec::new(),
-            head_loc: 0,
+            head_idx: 0,
             cursor: SL_BEGIN,
             seek: SL_BEGIN,
             err: None,
@@ -580,38 +580,73 @@ impl Lex {
         new_tok
     }
 
+    fn fill_peekbuf(&mut self) {
+        while self.head_idx >= self.peek_buf.len() {
+            // Doing this to stash the error (instead of ?)
+            match self.lex_new() {
+                Ok(tok) => self.peek_buf.push(tok),
+                Err(err) => {
+                    self.err = Some(err);
+                    return;
+                }
+            }
+        }
+    }
+
     pub fn peek(&mut self) -> Result<&AnnotTok, CompileErr> {
         if let Some(e) = &self.err {
             return Err(e.clone());
         }
 
-        // Catch the peek buffer up to the head pointer
-        while self.head_loc >= self.peek_buf.len() {
-            // Doing this to stash the error (instead of ?)
-            match self.lex_new() {
-                Ok(tok) => self.peek_buf.push(tok),
-                Err(err) => {
-                    let ret = Err(err.clone());
-                    self.err = Some(err);
-                    return ret;
-                }
-            }
+        self.fill_peekbuf();
+        if let Some(e) = &self.err {
+            return Err(e.clone());
         }
-        Ok(&self.peek_buf[self.head_loc])
+        // Catch the peek buffer up to the head pointer
+        Ok(&self.peek_buf[self.head_idx])
     }
 
     pub fn eat(&mut self) {
-        // Lazily move the head pointer forward
-        self.head_loc += 1;
+        if self.err.is_some() {
+            return;
+        }
+
+        self.head_idx += 1;
     }
 
     pub fn mark(&mut self) {
-        self.mark_data = (self.cursor, self.head_loc);
+        self.mark_data = (self.cursor, self.head_idx);
     }
 
     pub fn rewind(&mut self) {
-        (self.cursor, self.head_loc) = self.mark_data;
+        (self.cursor, self.head_idx) = self.mark_data;
         self.seek = self.cursor;
+    }
+
+    pub fn head_loc(&mut self) -> SourceLoc {
+        if self.err.is_some() {
+            return SL_NIL;
+        }
+        self.fill_peekbuf();
+        if self.err.is_some() {
+            SL_NIL
+        } else {
+            self.peek_buf[self.head_idx].loc
+        }
+    }
+
+    pub fn prev_loc(&mut self) -> SourceLoc {
+        if self.err.is_some() {
+            return SL_NIL;
+        }
+        self.fill_peekbuf();
+        if self.err.is_some() {
+            SL_NIL
+        } else if self.head_idx == 0 {
+            SL_BEGIN
+        } else {
+            self.peek_buf[self.head_idx - 1].loc
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 use crate::compile::ast::*;
 use crate::compile::lex::{Lex, Token, TokenDiscriminants};
 use crate::compile::parsec::{
-    epsilon, extid, extint, icl, ifx, inv, mat, maybe, oneof, pfx, seql, seqlr, seqr, Parser,
+    cvt, epsilon, extid, extint, icl, ifx, inv, mat, maybe, pfx, rep, seql, seqlr, seqr, withannot,
+    Parser, ToOneOf,
 };
 use crate::compile::{annot, CompileErr, LocationAnnot, SourceLoc, SL_NIL};
 use std::cmp::Ordering;
@@ -35,14 +36,17 @@ pub fn parse(script: String) -> Result<Script, CompileErr> {
             Token::Identifier(i) if i == "interface" => {}
             Token::Identifier(i) if i == "behavior" => {}
             Token::Identifier(i) if i == "fn" => {}
-            Token::Identifier(i) if i == "extern" => {}
+            Token::Identifier(i) if i == "extern" => {
+                lexer.eat();
+                //                res.funcs.push(parse_func_decl(&mut lexer)?);
+            }
             _ => return Err(CompileErr::Message("Expected valid top-level definition")),
         }
     }
     Ok(res)
 }
 
-fn parse_enum_expr(lexer: &mut Lex) -> Result<LocationAnnot<u64>, CompileErr> {
+fn parse_enum_expr(lexer: &mut Lex) -> Result<u64, CompileErr> {
     let eval_binop = |lhs: u64, op: Token, rhs: u64| -> u64 {
         match op {
             Token::Pipe => lhs | rhs,
@@ -74,13 +78,14 @@ fn parse_enum_expr(lexer: &mut Lex) -> Result<LocationAnnot<u64>, CompileErr> {
                             pfx(
                                 &[Token::Dash, Token::Tilde],
                                 eval_unop,
-                                oneof(
+                                (
                                     extint(),
                                     seql(
                                         seqr(mat(Token::LParen), inv(parse_enum_expr)),
                                         mat(Token::RParen),
                                     ),
-                                ),
+                                )
+                                    .oneof(),
                             ),
                             &[Token::Asterisk, Token::FSlash, Token::Percent],
                             eval_binop,
@@ -104,9 +109,8 @@ fn parse_enum_expr(lexer: &mut Lex) -> Result<LocationAnnot<u64>, CompileErr> {
 }
 
 fn parse_enum(lexer: &mut Lex) -> Result<EnumerationDef, CompileErr> {
-    let (nm, mtp) = seqlr(extid(), maybe(Token::Colon, extid()))
-        .parse(lexer)?
-        .inner;
+    let (nm, mtp) =
+        seqlr(withannot(extid()), maybe(Token::Colon, withannot(extid()))).parse(lexer)?;
 
     let parse_type = |tp: LocationAnnot<String>| -> Result<LocationAnnot<BaseType>, CompileErr> {
         match tp.inner.as_str() {
@@ -123,14 +127,17 @@ fn parse_enum(lexer: &mut Lex) -> Result<EnumerationDef, CompileErr> {
     };
     let mut ret = EnumerationDef {
         name: nm,
-        tp: if let Some(tp) = mtp.inner {
+        tp: if let Some(tp) = mtp {
             parse_type(tp)?
         } else {
             annot(SL_NIL, BaseType::Int32)
         },
         ents: Vec::new(),
     };
-    let enum_ent = seqlr(extid(), maybe(Token::Equal, inv(parse_enum_expr)));
+    let enum_ent = seqlr(
+        withannot(extid()),
+        maybe(Token::Equal, withannot(inv(parse_enum_expr))),
+    );
     let enum_body = seqr(
         mat(Token::LCurly),
         seql(
@@ -141,12 +148,11 @@ fn parse_enum(lexer: &mut Lex) -> Result<EnumerationDef, CompileErr> {
 
     ret.ents = enum_body
         .parse(lexer)?
-        .inner
         .into_iter()
         .fold(Vec::new(), |mut vec, el| {
             vec.push((
-                el.inner.0,
-                el.inner.1.inner.unwrap_or(annot(
+                el.0,
+                el.1.unwrap_or(annot(
                     SL_NIL,
                     vec.last().map(|x| x.1.inner + 1).unwrap_or(0),
                 )),
@@ -155,6 +161,43 @@ fn parse_enum(lexer: &mut Lex) -> Result<EnumerationDef, CompileErr> {
         });
     Ok(ret)
 }
+
+//fn parse_fulltype(lexer: &mut Lex) -> Result<LocationAnnot<FullType>, CompileErr> {
+//    let res = rep(cvt(
+//        |(a, b)| {},
+//        seqlr(
+//            (
+//                cvt(
+//                    |_| TypeKind::List,
+//                    mat(Token::Identifier(String::from("list"))),
+//                ),
+//                cvt(
+//                    |_| TypeKind::Maybe,
+//                    mat(Token::Identifier(String::from("maybe"))),
+//                ),
+//                cvt(
+//                    |_| TypeKind::View,
+//                    mat(Token::Identifier(String::from("view"))),
+//                ),
+//            )
+//                .oneof(),
+//            maybe(Token::Ampersand, epsilon()),
+//        ),
+//    ))
+//    .parse(lexer);
+//}
+//
+//fn parse_param_list(lexer: &mut Lex) -> Result<LocationAnnot<Vec<Var>>, CompileErr> {
+//    seqlr(extid(), seqr(mat(Token::Colon), inv(parse_fulltype)));
+//}
+//
+//fn parse_func_decl(lexer: &mut Lex) -> Result<FuncDecl, CompileErr> {
+//    let nm = extid().parse(lexer);
+//    let params = seql(
+//        seqr(mat(Token::LParen), inv(parse_param_list)),
+//        mat(Token::RParen),
+//    );
+//}
 
 #[cfg(test)]
 mod tests {

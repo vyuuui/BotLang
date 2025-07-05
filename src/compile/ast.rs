@@ -54,14 +54,14 @@ pub enum BaseType {
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum TypeKind {
-    List(bool),
-    Maybe(bool),
-    View(bool),
+    List,
+    Maybe,
+    View,
 }
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct FullType {
-    kind: Vec<TypeKind>,
+    kind: Vec<(TypeKind, bool)>,
     base: BaseType,
 }
 
