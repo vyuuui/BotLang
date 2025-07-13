@@ -69,6 +69,10 @@ pub enum Token {
     Eof,
 }
 
+pub fn mkident(id: &str) -> Token {
+    Token::Identifier(String::from(id))
+}
+
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

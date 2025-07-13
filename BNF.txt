@@ -1,8 +1,7 @@
 BotLang BNF
 
 -------------------------------------BNF Root-----------------------------------
-root             ::=
-                     'import' <string> ';' |
+root             ::= 'import' <string> ';' |
                      <enum_def> |
                      <interface_def> |
                      <behavior_def> |
@@ -12,7 +11,7 @@ root             ::=
 enum_def         ::= 'enum' <id> (':' <enum_types>)? '{' <enum_body> '}'
 interface_def    ::= 'interface' <id> (':' <id>)? '{' <interface_body> '}'
 behavior_def     ::= 'behavior' '(' <id> <param_list> ')' '=' <b_expr> ';'
-fn_def           ::= 'fn' <id> '(' <param_list> ')' '->' <id> <block>
+fn_def           ::= 'fn' <id> '(' <param_list> ')' '->' <fulltype> <p_block>
 
 
 ------------------------------------BNF Enums-----------------------------------
@@ -58,27 +57,29 @@ b_base_expr      ::= '(' <b_expr> ')' |
 
 ----------------------------------BNF Procedural--------------------------------
 
-block            ::= '{' <stmt>* ('emit' <p_expr>)? '}'
+p_block          ::= '{' <stmt_list> '}'
+stmt_list        ::= <stmt>* <no_block_pexpr>?
 stmt             ::= 'var' <id> ':' <fulltype> ('=' <p_expr>)? ';' |
-                     <cflow>
-                     'guard' <p_expr> ('->' <p_expr>)? ';' | // typecheck will validate return value
-                     'break' ';' |
-                     'continue' ';' |
-                     'return' (<p_expr>)? ';' | // typecheck will validate return value
-                     <stmt_expr> ';' |
+                     <no_block_pexpr> ';' |
+                     <block_pexpr> ';'? |
                      ';'
-stmt_expr        ::= <p_assign>
-p_expr           ::= <cflow> |
+p_expr_stmt      ::= <no_block_pexpr> ';' |
+                     <block_pexpr> ';'?
+p_expr           ::= <no_block_pexpr> |
+                     <block_pexpr>
+block_pexpr      ::= 'if' <p_expr> <p_block> ('else' <p_block>)? |
+                     'while' <p_expr> <p_block> |
+                     'for' <id> 'in' <p_expr> <p_block> |
+                     'match' <p_expr> '{' (<p_expr> '->' <p_block>)* '}' |
+                     'case' '{' (<p_expr> '->' <p_block>)* '}' |
+                     <p_block>
+no_block_pexpr   ::= 'guard' <p_expr> ('->' <p_expr>)? |
+                     'break' |
+                     'continue' |
+                     'return' (<p_expr>)? |
                      <p_assign>
 p_expr_list      ::= E | <p_expr> (',' <p_expr>)*
-cflow            ::= 'if' <p_expr> <block> ('else' <block>)? |
-                     'while' <p_expr> <block> |
-                     'for' <id> 'in' <p_expr> <block> |
-                     'match' <p_expr> '{' (<p_expr> '->' <block>)* '}' |
-                     'case' '{' (<p_expr> '->' <block>)* '}'
-p_assign         ::= <lvalue> ['=', '+=', '-=', '*=', '/=', '%=',
-                               '&=', '^=', '|=', '~=', '<<=', '>>='] <p_assign> |
-                     <p_lor>
+p_assign         ::= <p_lor> (['=', '+=', '-=', '*=', '/=', '%=', '&=', '^=', '|=', '~=', '<<=', '>>='] <p_lor>)?
 p_lor            ::= <p_land> ('||' <p_land>)*
 p_land           ::= <p_bor> ('&&' <p_bor>)*
 p_bor            ::= <p_bxor> ('|' <p_bxor>)*
@@ -91,12 +92,13 @@ p_add            ::= <p_mult> (['+', '-'] <p_mult>)*
 p_mult           ::= <p_unary> (['*', '/', '%'] <p_unary>)*
 p_unary          ::= ['-', '~', '!'] <p_unary> | <p_cast>
 p_cast           ::= <p_base_expr> (':' <fulltype>)?
+p_indir          ::= <p_base_expr> <indir>*
 p_base_expr      ::= '(' <p_expr> ')' |
-                     <rvalue> |
+                     <block_pexpr> |
                      <range>
 lvalue           ::= <id> <lvalue_indir>*
 lvalue_indir     ::= '.' <id> |
-                     '[' <all_expr> ']'
+                     '[' <p_expr> ']'
 rvalue           ::= <id> <indir>* |
                      <p_literal>
 indir            ::= <lvalue_indir> |

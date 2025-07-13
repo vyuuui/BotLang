@@ -127,6 +127,12 @@ pub struct LocationAnnot<T> {
     pub inner: T,
 }
 
+impl<T: fmt::Display> fmt::Display for LocationAnnot<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
 impl<T> LocationAnnot<T> {
     pub fn new(loc: SourceLoc, inner: T) -> Self {
         Self { loc, inner }
@@ -135,4 +141,8 @@ impl<T> LocationAnnot<T> {
 
 pub fn annot<T>(loc: SourceLoc, inner: T) -> LocationAnnot<T> {
     LocationAnnot::new(loc, inner)
+}
+
+pub fn annot_nil<T>(inner: T) -> LocationAnnot<T> {
+    LocationAnnot::new(SL_NIL, inner)
 }
