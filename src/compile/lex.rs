@@ -1,8 +1,8 @@
 use std::fmt;
 use std::str;
-use strum_macros::{EnumDiscriminants, Display};
+use strum_macros::{Display, EnumDiscriminants};
 
-use crate::compile::{SourceLoc, LocationAnnot, SL_BEGIN, SL_NIL, CompileErr};
+use crate::compile::{CompileErr, LocationAnnot, SourceLoc, SL_BEGIN, SL_NIL};
 
 #[derive(Clone, PartialEq, Debug, EnumDiscriminants)]
 #[strum_discriminants(derive(Display))]
@@ -19,6 +19,7 @@ pub enum Token {
     RAngle,          // >
     Ampersat,        // @
     Ampersand,       // &
+    Hash,            //
     Pipe,            // |
     Plus,            // +
     Dash,            // -
@@ -86,6 +87,7 @@ impl fmt::Display for Token {
             Token::RAngle => write!(f, ">"),
             Token::Ampersat => write!(f, "@"),
             Token::Ampersand => write!(f, "&"),
+            Token::Hash => write!(f, "#"),
             Token::Pipe => write!(f, "|"),
             Token::Plus => write!(f, "+"),
             Token::Dash => write!(f, "-"),
@@ -468,6 +470,7 @@ impl Lex {
                 }
                 _ => Token::Ampersand,
             },
+            '#' => Token::Hash,
             '|' => match self.peek_char() {
                 Some('=') => {
                     self.seek.next('=');

@@ -36,7 +36,6 @@ interface_memb   ::= <fn_def> |
 
 
 ----------------------------------BNF Behaviors---------------------------------
-behavior_decl    ::= '(' <id> <param_list> ')'
 b_expr_list      ::= E | <b_expr> (',' <b_expr>)*
 b_expr           ::= <b_lor>
 b_lor            ::= <b_land> ('||' <b_land>)*

@@ -1,4 +1,4 @@
-use crate::compile::lex::{Lex, Token, TokenDiscriminants};
+use crate::compile::lex::{mkident, Lex, Token, TokenDiscriminants};
 use crate::compile::{annot, CompileErr, LocationAnnot};
 use std::marker::PhantomData;
 
@@ -172,6 +172,33 @@ impl<PT> Parser<TokenDiscriminants, PT> for MatchType<PT> {
             (Ok(self.t), l.eat()).0
         } else {
             Err(CompileErr::TypeMismatch(self.t, tok.inner.clone()))
+        }
+    }
+}
+
+pub struct MatchIdent<PT> {
+    id: &'static str,
+    marker: PhantomData<PT>,
+}
+
+impl<PT> Parser<(), PT> for MatchIdent<PT> {
+    fn optional(&self) -> bool {
+        false
+    }
+
+    fn ll1(&self, _: &PT, l: &mut Lex) -> Result<bool, CompileErr> {
+        if let Token::Identifier(id) = &l.peek()?.inner {
+            Ok(id == self.id)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn parse(&self, _: &PT, l: &mut Lex) -> Result<(), CompileErr> {
+        let tok = l.peek()?;
+        match &tok.inner {
+            Token::Identifier(id) if id == self.id => (Ok(()), l.eat()).0,
+            _ => Err(CompileErr::ValMismatch(mkident(self.id), tok.inner.clone())),
         }
     }
 }
@@ -408,6 +435,36 @@ impl<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>> Parser<OutR, PT
     }
 }
 
+pub struct MaybeSeqR<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>> {
+    lhs: PL,
+    rhs: PR,
+    marker: PhantomData<(OutL, OutR, PT)>,
+}
+
+impl<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>> Parser<Option<OutR>, PT>
+    for MaybeSeqR<OutL, OutR, PT, PL, PR>
+{
+    fn optional(&self) -> bool {
+        self.lhs.optional() && self.rhs.optional()
+    }
+
+    fn ll1(&self, pt: &PT, l: &mut Lex) -> Result<bool, CompileErr> {
+        if self.lhs.optional() {
+            Ok(self.lhs.ll1(pt, l)? || self.rhs.ll1(pt, l)?)
+        } else {
+            self.lhs.ll1(pt, l)
+        }
+    }
+
+    fn parse(&self, pt: &PT, l: &mut Lex) -> Result<Option<OutR>, CompileErr> {
+        if self.lhs.ll1(pt, l)? {
+            Ok(Some((self.lhs.parse(pt, l)?, self.rhs.parse(pt, l)?).1))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 pub struct SeqLR<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>> {
     lhs: PL,
     rhs: PR,
@@ -535,36 +592,52 @@ mkwrapped!(Token::LParen, Token::RParen, WrapParen, wrparen);
 mkwrapped!(Token::LCurly, Token::RCurly, WrapCurly, wrcurly);
 mkwrapped!(Token::LBracket, Token::RBracket, WrapBracket, wrbracket);
 
-pub trait ToOneOf<T> {
-    fn oneof(self) -> T;
+pub trait OneOfTuple<Out, PT, T> {
+    fn oneof_optional(&self) -> bool;
+    fn oneof_ll1(&self, pt: &PT, l: &mut Lex) -> Result<bool, CompileErr>;
+    fn oneof_parse(&self, pt: &PT, l: &mut Lex) -> Result<Out, CompileErr>;
+}
+
+pub struct OneOf<Out, PT, T: OneOfTuple<Out, PT, T>> {
+    tup: T,
+    marker: PhantomData<(Out, PT)>,
+}
+
+impl<Out, PT, T: OneOfTuple<Out, PT, T>> Parser<Out, PT> for OneOf<Out, PT, T> {
+    fn optional(&self) -> bool {
+        self.tup.oneof_optional()
+    }
+
+    fn ll1(&self, pt: &PT, l: &mut Lex) -> Result<bool, CompileErr> {
+        self.tup.oneof_ll1(pt, l)
+    }
+
+    fn parse(&self, pt: &PT, l: &mut Lex) -> Result<Out, CompileErr> {
+        self.tup.oneof_parse(pt, l)
+    }
 }
 
 macro_rules! mkoneof {
     // Thankfully OneOf is pointless with a single subparser, so this doesn't need repeating for
     // the base case
-    ($n0:ident $t0:ident $v0:ident) => {};
+    ($t0:ident $v0:ident) => {};
 
-    ($n0:ident $t0:ident $v0:ident, $($nk:ident $tk:ident $vk:ident),*) => {
-        mkoneof!($($nk $tk $vk),*);
+    ($t0:ident $v0:ident, $($tk:ident $vk:ident),*) => {
+        mkoneof!($($tk $vk),*);
 
-        pub struct $n0<Out, PT, $t0, $($tk),*> {
-            tup: ($t0, $($tk),*),
-            marker: PhantomData<(Out, PT)>,
-        }
-
-        impl<Out, PT, $t0: Parser<Out, PT>, $($tk: Parser<Out, PT>),*> Parser<Out, PT> for $n0<Out, PT, $t0, $($tk,)*> {
-            fn optional(&self) -> bool {
-                let ($v0, $($vk),*) = &self.tup;
+        impl<Out, PT, $t0: Parser<Out, PT>, $($tk: Parser<Out, PT>),*> OneOfTuple<Out, PT, ($t0, $($tk,)*)> for ($t0, $($tk,)*) {
+            fn oneof_optional(&self) -> bool {
+                let ($v0, $($vk),*) = &self;
                 $v0.optional() $(&& $vk.optional())*
             }
 
-            fn ll1(&self, pt: &PT, l: &mut Lex) -> Result<bool, CompileErr> {
-                let ($v0, $($vk),*) = &self.tup;
+            fn oneof_ll1(&self, pt: &PT, l: &mut Lex) -> Result<bool, CompileErr> {
+                let ($v0, $($vk),*) = &self;
                 Ok($v0.ll1(pt, l)? $(|| $vk.ll1(pt, l)?)*)
             }
 
-            fn parse(&self, pt: &PT, l: &mut Lex) -> Result<Out, CompileErr> {
-                let ($v0, $($vk),*) = &self.tup;
+            fn oneof_parse(&self, pt: &PT, l: &mut Lex) -> Result<Out, CompileErr> {
+                let ($v0, $($vk),*) = &self;
                 if $v0.ll1(pt, l)? {
                     $v0.parse(pt, l)
                 } $(else if $vk.ll1(pt, l)? {
@@ -574,20 +647,10 @@ macro_rules! mkoneof {
                 }
             }
         }
-
-        impl<Out, PT, $t0: Parser<Out, PT>, $($tk: Parser<Out, PT>),*> ToOneOf<$n0<Out, PT, $t0, $($tk,)*>> for ($t0, $($tk,)*) {
-            fn oneof(self) -> $n0<Out, PT, $t0, $($tk,)*> {
-                $n0 {
-                    tup: self,
-                    marker: PhantomData,
-                }
-            }
-        }
-
     };
 }
 
-mkoneof!(OoA A a, OoB B b, OoC C c, OoD D d, OoE E e, OoF F f, OoG G g, OoH H h, OoI I i, OoJ J j, OoK K k, OoL L l, OoM M m, OoN N n, OoO O o, OoP P p, OoQ Q q, OoR R r, OoS S s, OoT T t);
+mkoneof!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l, M m, N n, O o, P p, Q q, R r, S s, T t);
 
 pub struct Alternative<Out, PT, PL: Parser<Out, PT>, PR: Parser<Out, PT>> {
     lhs: PL,
@@ -626,7 +689,7 @@ impl<Out, PT, PL: Parser<Out, PT>, PR: Parser<Out, PT>> Parser<Out, PT>
     }
 }
 
-pub fn epsilon<PT>() -> impl Parser<(), PT> {
+pub const fn epsilon<PT>() -> impl Parser<(), PT> {
     Epsilon {
         marker: PhantomData,
     }
@@ -652,21 +715,21 @@ pub fn log<Out, PT, P: Parser<Out, PT>>(
     }
 }
 
-pub fn inv<Out, PT>(
+pub const fn inv<Out, PT>(
     l: fn(&PT, &mut Lex) -> Result<bool, CompileErr>,
     f: fn(&PT, &mut Lex) -> Result<Out, CompileErr>,
 ) -> impl Parser<Out, PT> {
     Invoke { l, f }
 }
 
-pub fn maybeinv<Out, PT>(
+pub const fn maybeinv<Out, PT>(
     l: fn(&PT, &mut Lex) -> Result<bool, CompileErr>,
     f: fn(&PT, &mut Lex) -> Result<Out, CompileErr>,
 ) -> impl Parser<Option<Out>, PT> {
     MaybeInvoke { l, f }
 }
 
-pub fn cvt<In, Out, PT, P: Parser<In, PT>>(f: fn(In) -> Out, sub: P) -> impl Parser<Out, PT> {
+pub const fn cvt<In, Out, PT, P: Parser<In, PT>>(f: fn(In) -> Out, sub: P) -> impl Parser<Out, PT> {
     Convert {
         f,
         sub,
@@ -688,6 +751,13 @@ pub fn cvt_witherr<In, Out, PT, P: Parser<In, PT>>(
 pub fn mat_tp<PT>(tok: TokenDiscriminants) -> impl Parser<TokenDiscriminants, PT> {
     MatchType {
         t: tok,
+        marker: PhantomData,
+    }
+}
+
+pub fn mat_id<PT>(id: &'static str) -> impl Parser<(), PT> {
+    MatchIdent {
+        id,
         marker: PhantomData,
     }
 }
@@ -762,7 +832,7 @@ pub fn seqr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
     }
 }
 
-pub fn seqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
+pub const fn seqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
     lhs: PL,
     rhs: PR,
 ) -> impl Parser<(OutL, OutR), PT> {
@@ -773,7 +843,18 @@ pub fn seqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
     }
 }
 
-pub fn maybeseqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
+pub const fn maybeseqr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
+    lhs: PL,
+    rhs: PR,
+) -> impl Parser<Option<OutR>, PT> {
+    MaybeSeqR {
+        lhs,
+        rhs,
+        marker: PhantomData,
+    }
+}
+
+pub const fn maybeseqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
     lhs: PL,
     rhs: PR,
 ) -> impl Parser<Option<(OutL, OutR)>, PT> {
@@ -784,7 +865,10 @@ pub fn maybeseqlr<OutL, OutR, PT, PL: Parser<OutL, PT>, PR: Parser<OutR, PT>>(
     }
 }
 
-pub fn flagged<Out, PT, P: Parser<Out, PT>>(t: Token, sub: P) -> impl Parser<Option<Out>, PT> {
+pub const fn flagged<Out, PT, P: Parser<Out, PT>>(
+    t: Token,
+    sub: P,
+) -> impl Parser<Option<Out>, PT> {
     Flagged {
         t,
         sub,
@@ -792,13 +876,20 @@ pub fn flagged<Out, PT, P: Parser<Out, PT>>(t: Token, sub: P) -> impl Parser<Opt
     }
 }
 
-pub fn alt<Out, PT, PL: Parser<Out, PT>, PR: Parser<Out, PT>>(
+pub const fn alt<Out, PT, PL: Parser<Out, PT>, PR: Parser<Out, PT>>(
     lhs: PL,
     rhs: PR,
 ) -> impl Parser<Out, PT> {
     Alternative {
         lhs,
         rhs,
+        marker: PhantomData,
+    }
+}
+
+pub const fn oneof<Out, PT, T: OneOfTuple<Out, PT, T>>(tup: T) -> impl Parser<Out, PT> {
+    OneOf {
+        tup,
         marker: PhantomData,
     }
 }

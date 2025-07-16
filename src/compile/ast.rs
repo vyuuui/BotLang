@@ -11,6 +11,36 @@ pub struct Script {
     pub interfaces: Vec<InterfaceDef>,
 }
 
+impl fmt::Display for Script {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Imports list:")?;
+        for i in &self.imports {
+            writeln!(f, "\t{i}")?;
+        }
+
+        for func in &self.funcs {
+            writeln!(f, "{func}")?;
+        }
+
+        for behavior in &self.behaviors {
+            writeln!(f, "{behavior}")?;
+        }
+
+        for enumeration in &self.enums {
+            writeln!(f, "{enumeration}")?;
+        }
+
+        for decl in &self.externs {
+            writeln!(f, "{decl}")?;
+        }
+
+        for interface in &self.interfaces {
+            writeln!(f, "{interface}")?;
+        }
+        Ok(())
+    }
+}
+
 ////////////
 // Shared //
 ////////////
@@ -52,6 +82,7 @@ impl fmt::Display for Literal {
 ///////////
 #[derive(PartialEq, Eq, Debug)]
 pub enum BaseType {
+    Void,
     Int8,
     Int16,
     Int32,
@@ -75,6 +106,7 @@ pub enum BaseType {
 impl fmt::Display for BaseType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Void => write!(f, "void"),
             Self::Int8 => write!(f, "i8"),
             Self::Int16 => write!(f, "i16"),
             Self::Int32 => write!(f, "i32"),
@@ -146,6 +178,9 @@ impl fmt::Display for FullType {
 }
 
 macro_rules! mkbasetype {
+    (void) => {
+        BaseType::Void
+    };
     (i8) => {
         BaseType::Int8
     };
@@ -438,65 +473,109 @@ pub enum PExpr {
     Nil,
 }
 
-impl fmt::Display for PExpr {
+pub struct PExprDisplayMeta<'a> {
+    pe: &'a PExpr,
+    indent: usize,
+}
+
+impl<'a> PExprDisplayMeta<'a> {
+    fn new(pe: &'a AnnotPExpr) -> PExprDisplayMeta<'a> {
+        PExprDisplayMeta {
+            pe: &pe.inner,
+            indent: 0,
+        }
+    }
+
+    fn wrap(&self, pe: &'a AnnotPExpr) -> PExprDisplayMeta<'a> {
+        PExprDisplayMeta {
+            pe: &pe.inner,
+            indent: self.indent,
+        }
+    }
+
+    fn tab_in(&self, pe: &'a AnnotPExpr) -> PExprDisplayMeta<'a> {
+        PExprDisplayMeta {
+            pe: &pe.inner,
+            indent: self.indent + 2,
+        }
+    }
+}
+
+
+impl<'a> fmt::Display for PExprDisplayMeta<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Block(subs, mout) => {
+        let w0: usize = self.indent;
+        let w2: usize = self.indent + 2;
+        match self.pe {
+            PExpr::Block(subs, mout) => {
                 writeln!(f, "{{")?;
                 for sub in subs {
-                    writeln!(f, "{sub};")?;
+                    writeln!(f, "{:<w2$}{};", ' ', self.tab_in(sub))?;
                 }
                 if let Some(out) = mout {
-                    writeln!(f, "{out}")?;
+                    writeln!(f, "{:<w2$}{}", ' ', self.tab_in(out))?;
                 }
-                writeln!(f, "}}")
+                // oh no perf
+                for _ in 0..w0 {
+                    write!(f, " ")?;
+                }
+                write!(f, "}}")
             }
 
-            Self::If(cond, tb) => writeln!(f, "if {cond} {tb}"),
-            Self::IfElse(cond, tb, fb) => writeln!(f, "if {cond} {tb} else {fb}"),
-            Self::While(cond, body) => writeln!(f, "while {cond} {body}"),
-            Self::For(var, cont, body) => writeln!(f, "for {var} in {cont} {body}"),
-            Self::Match(cond, arms) => {
-                writeln!(f, "match {cond} {{")?;
+            PExpr::If(cond, tb) => write!(f, "if {} {}", self.wrap(cond), self.wrap(tb)),
+            PExpr::IfElse(cond, tb, fb) => write!(f, "if {} {} else {}", self.wrap(cond), self.wrap(tb), self.wrap(fb)),
+            PExpr::While(cond, body) => write!(f, "while {} {}", self.wrap(cond), self.wrap(body)),
+            PExpr::For(var, cont, body) => write!(f, "for {var} in {} {}", self.wrap(cont), self.wrap(body)),
+            PExpr::Match(cond, arms) => {
+                writeln!(f, "match {} {{", self.wrap(cond))?;
                 for (matcher, body) in arms {
-                    writeln!(f, "{matcher} -> {body}")?;
+                    writeln!(f, "{:<w2$}{} -> {}", ' ', self.wrap(matcher), self.wrap(body))?;
                 }
-                writeln!(f, "}}")
+                // oh no perf
+                for _ in 0..w0 {
+                    write!(f, " ")?;
+                }
+                write!(f, "}}")
             }
-            Self::Case(arms) => {
+            PExpr::Case(arms) => {
                 writeln!(f, "case {{")?;
                 for (matcher, body) in arms {
-                    writeln!(f, "{matcher} -> {body}")?;
+                    writeln!(f, "{:<w2$}{} -> {}", ' ', self.wrap(matcher), self.wrap(body))?;
                 }
-                writeln!(f, "}}")
+                // oh no perf
+                for _ in 0..w0 {
+                    write!(f, " ")?;
+                }
+                write!(f, "}}")
             }
 
-            Self::Assign(lhs, op, rhs) => write!(f, "{lhs} {op} {rhs}"),
-            Self::Binary(lhs, op, rhs) => write!(f, "{lhs} {op} {rhs}"),
-            Self::Unary(op, sub) => write!(f, "{op}{sub}"),
-            Self::Cast(expr, tp) => write!(f, "{expr} : {tp}"),
-            Self::MemAcc(expr, memb) => write!(f, "{expr}.{memb}"),
-            Self::Subscr(expr, idx) => write!(f, "{expr}[{idx}]"),
-            Self::Call(expr, params) => {
-                // sorry perf
-                write!(
-                    f,
-                    "{expr}({})",
-                    params
-                        .iter()
-                        .map(AnnotPExpr::to_string)
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
+            PExpr::Assign(lhs, op, rhs) => write!(f, "{} {op} {}", self.wrap(lhs), self.wrap(rhs)),
+            PExpr::Binary(lhs, op, rhs) => write!(f, "{} {op} {}", self.wrap(lhs), self.wrap(rhs)),
+            PExpr::Unary(op, sub) => write!(f, "{op}{}", self.wrap(sub)),
+            PExpr::Cast(expr, tp) => write!(f, "{} : {tp}", self.wrap(expr)),
+            PExpr::MemAcc(expr, memb) => write!(f, "{}.{memb}", self.wrap(expr)),
+            PExpr::Subscr(expr, idx) => write!(f, "{}[{}]", self.wrap(expr), self.wrap(idx)),
+            PExpr::Call(expr, params) => {
+                write!(f, "{}(", self.wrap(expr))?;
+                let mut first = true;
+                for param in params {
+                    if first {
+                        write!(f, "{}", self.wrap(param))?;
+                        first = false;
+                    } else {
+                        write!(f, ", {}", self.wrap(param))?;
+                    }
+                }
+                write!(f, ")")
             }
-            Self::Lit(lit) => write!(f, "{lit}"),
-            Self::Ident(id) => write!(f, "{id}"),
-            Self::VarDecl(v, expr) => write!(f, "var {v} = {expr}"),
-            Self::Guard(cond, ret) => write!(f, "guard {cond} -> {ret}"),
-            Self::Break => write!(f, "break"),
-            Self::Continue => write!(f, "continue"),
-            Self::Return(expr) => write!(f, "return {expr}"),
-            Self::Nil => write!(f, "<nil/error>"),
+            PExpr::Lit(lit) => write!(f, "{lit}"),
+            PExpr::Ident(id) => write!(f, "{id}"),
+            PExpr::VarDecl(v, expr) => write!(f, "var {v} = {}", self.wrap(expr)),
+            PExpr::Guard(cond, ret) => write!(f, "guard {} -> {}", self.wrap(cond), self.wrap(ret)),
+            PExpr::Break => write!(f, "break"),
+            PExpr::Continue => write!(f, "continue"),
+            PExpr::Return(expr) => write!(f, "return {}", self.wrap(expr)),
+            PExpr::Nil => write!(f, "<nil/error>"),
         }
     }
 }
@@ -519,37 +598,89 @@ impl fmt::Display for FuncDef {
             writeln!(f, "\tParameter {idx} = {p}")?;
         }
         writeln!(f, "\tReturns: {}", self.rtp)?;
-        writeln!(f, "Body:\n{}", self.body)
+        writeln!(f, "Body:\n{}", PExprDisplayMeta::new(&self.body))
     }
 }
 
 /////////////////////
 // Behavioral lang //
 /////////////////////
-type AnnotBExpr = LocationAnnot<Box<BExpr>>;
+pub type AnnotBExpr = LocationAnnot<Box<BExpr>>;
 
 #[derive(Debug)]
 pub enum BExpr {
     // Expressions
-    Binary(AnnotBExpr, BinaryOp, AnnotBExpr), // Expr0 BinOp Expr1
-    Unary(UnaryOp, AnnotBExpr),               // UnOp Expr
-    Cast(AnnotBExpr, LocationAnnot<FullType>), // Expr : FullType
-    MemAcc(AnnotBExpr, LocationAnnot<String>), // Expr.Id
-    Subscr(AnnotBExpr, AnnotBExpr),           // Expr0[Expr1]
-    Call(String, Vec<AnnotBExpr>),            // (#Id Expr0, Expr1...)
-    Curry(String, Vec<AnnotBExpr>),           // (@Id Expr0, Expr1...)
+    Binary(AnnotBExpr, BinaryOp, AnnotBExpr),      // Expr0 BinOp Expr1
+    Unary(UnaryOp, AnnotBExpr),                    // UnOp Expr
+    Cast(AnnotBExpr, LocationAnnot<FullType>),     // Expr : FullType
+    MemAcc(AnnotBExpr, LocationAnnot<String>),     // Expr.Id
+    Subscr(AnnotBExpr, AnnotBExpr),                // Expr0[Expr1]
+    Call(LocationAnnot<String>, Vec<AnnotBExpr>),  // (#Id Expr0, Expr1...)
+    Curry(LocationAnnot<String>, Vec<AnnotBExpr>), // (@Id Expr0, Expr1...)
 
     // Literals
     Lit(Literal),  // Literal
     Ident(String), // Id
+    Nil,
+}
+
+impl fmt::Display for BExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Binary(lhs, op, rhs) => write!(f, "{lhs} {op} {rhs}"),
+            Self::Unary(op, sub) => write!(f, "{op}{sub}"),
+            Self::Cast(op, tp) => write!(f, "{op} : {tp}"),
+            Self::MemAcc(sub, memb) => write!(f, "{sub}.{memb}"),
+            Self::Subscr(sub, idx) => write!(f, "{sub}[{idx}]"),
+            Self::Call(id, params) => {
+                write!(f, "(#{id} ")?;
+                let mut first = true;
+                for param in params {
+                    if first {
+                        write!(f, "{param}")?;
+                        first = false;
+                    } else {
+                        write!(f, ", {param}")?;
+                    }
+                }
+                write!(f, ")")
+            },
+            Self::Curry(id, params) => {
+                write!(f, "(@{id} ")?;
+                let mut first = true;
+                for param in params {
+                    if first {
+                        write!(f, "{param}")?;
+                        first = false;
+                    } else {
+                        write!(f, ", {param}")?;
+                    }
+                }
+                write!(f, ")")
+            },
+            Self::Lit(lit) => write!(f, "{lit}"),
+            Self::Ident(id) => write!(f, "{id}"),
+            Self::Nil => write!(f, "<nil/error>"),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct BehaviorDef {
-    name: LocationAnnot<String>,
-    params: Vec<Var>,
-    rtp: FullType, // Return type is inferred
-    body: AnnotBExpr,
+    pub name: LocationAnnot<String>,
+    pub params: Vec<Var>,
+    pub rtp: FullType, // Return type is inferred
+    pub body: AnnotBExpr,
+}
+
+impl fmt::Display for BehaviorDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Behavior name: {}", self.name)?;
+        for (idx, p) in self.params.iter().enumerate() {
+            writeln!(f, "\tParameter {idx} = {p}")?;
+        }
+        writeln!(f, "Body:\n{}", self.body)
+    }
 }
 
 //////////////////
@@ -562,6 +693,17 @@ pub struct EnumerationDef {
     pub ents: Vec<(LocationAnnot<String>, LocationAnnot<u64>)>,
 }
 
+impl fmt::Display for EnumerationDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Enum name: {}", self.name)?;
+        writeln!(f, "Enum type: {}", self.tp)?;
+        for (ent, val) in &self.ents {
+            writeln!(f, "\tEntry: {ent} = {val}")?;
+        }
+        Ok(())
+    }
+}
+
 /////////////
 // Externs //
 /////////////
@@ -572,20 +714,55 @@ pub struct FuncDecl {
     pub rtp: LocationAnnot<FullType>,
 }
 
+impl fmt::Display for FuncDecl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Extern function name: {}\n", self.name)?;
+        for (idx, p) in self.params.iter().enumerate() {
+            writeln!(f, "\tParameter {idx} = {p}")?;
+        }
+        writeln!(f, "\tReturns: {}", self.rtp)
+    }
+}
+
 ////////////////
 // Interfaces //
 ////////////////
 #[derive(Debug)]
 pub struct IVarDef {
-    name: LocationAnnot<String>,
-    tp: LocationAnnot<FullType>,
-    off: LocationAnnot<u64>,
+    pub name: LocationAnnot<String>,
+    pub tp: LocationAnnot<FullType>,
+    pub off: LocationAnnot<u64>,
+}
+
+impl fmt::Display for IVarDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "var {} : {} @ {};", self.name, self.tp, self.off)
+    }
 }
 
 #[derive(Debug)]
 pub struct InterfaceDef {
-    name: LocationAnnot<String>,
-    inherit: LocationAnnot<Option<String>>,
-    func_list: Vec<FuncDef>,
-    var_list: Vec<IVarDef>,
+    pub name: LocationAnnot<String>,
+    pub inherit: Option<LocationAnnot<String>>,
+    pub func_list: Vec<FuncDef>,
+    pub var_list: Vec<IVarDef>,
+}
+
+impl fmt::Display for InterfaceDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Interface name: {}", self.name)?;
+        if let Some(i) = &self.inherit {
+            writeln!(f, "\tInherits from: {i}")?;
+        }
+        writeln!(f, "IVar list:")?;
+        for v in &self.var_list {
+            writeln!(f, "\t{v}")?;
+        }
+        writeln!(f, "Func list:")?;
+        for (idx, func) in self.func_list.iter().enumerate() {
+            writeln!(f, "Function #{idx}:")?;
+            writeln!(f, "{func}")?
+        }
+        Ok(())
+    }
 }

@@ -1,9 +1,9 @@
 use crate::compile::ast::*;
 use crate::compile::lex::{mkident, Lex, Token, TokenDiscriminants};
 use crate::compile::parsec::{
-    alt, cvt, epsilon, extdbl, extflt, extid, extint, extstr, flagged, icl, ifx, inv, log, mat_tp,
-    mat_val, maybeinv, maybeseqlr, pfx, rep, seql, seqlr, seqr, withannot, wrbracket, wrcurly,
-    wrparen, Parser, ToOneOf,
+    log, cvt, cvt_witherr, epsilon, extdbl, extflt, extid, extint, extstr, flagged, icl, ifx, inv,
+    mat_id, mat_tp, maybeinv, maybeseqlr, oneof, pfx, rep, seql, seqlr, seqr, withannot, wrbracket,
+    wrcurly, wrparen, Parser,
 };
 use crate::compile::{annot, annot_nil, CompileErr, LocationAnnot, SourceLoc, SL_NIL};
 use std::cmp::Ordering;
@@ -17,6 +17,8 @@ struct SharedParsers {
     block_pexpr: Rc<dyn Parser<AnnotPExpr, SharedParsers>>,
     pexpr_optree: Rc<dyn Parser<AnnotPExpr, SharedParsers>>,
     pexpr_value: Rc<dyn Parser<AnnotPExpr, SharedParsers>>,
+    bexpr: Rc<dyn Parser<AnnotBExpr, SharedParsers>>,
+    bexpr_value: Rc<dyn Parser<AnnotBExpr, SharedParsers>>,
 }
 
 macro_rules! mk_invoke_pair {
@@ -35,30 +37,30 @@ pub fn parse(script: String) -> Result<Script, CompileErr> {
     let mut res = Script::default();
     let parsers: SharedParsers = build_shared_parsers();
     while lexer.peek()?.inner != Token::Eof {
-        match &lexer.peek()?.inner {
+        let tok = &lexer.peek()?.inner;
+        match tok {
             Token::Identifier(i) if i == "import" => {
                 lexer.eat();
-                if let LocationAnnot {
-                    loc,
-                    inner: Token::StringLiteral(imp),
-                } = &lexer.peek()?
-                {
-                    res.imports
-                        .push(annot(*loc, String::from_utf8(imp.clone())?));
-                } else {
-                    return Err(CompileErr::TypeMismatch(
-                        TokenDiscriminants::StringLiteral,
-                        lexer.peek()?.inner.clone(),
-                    ));
-                }
-                lexer.eat();
+                res.imports.push(
+                    seql(
+                        withannot(cvt_witherr(|s| Ok(String::from_utf8(s)?), extstr())),
+                        mat_tp(TokenDiscriminants::Semicolon),
+                    )
+                    .parse(&parsers, &mut lexer)?,
+                );
             }
             Token::Identifier(i) if i == "enum" => {
                 lexer.eat();
                 res.enums.push(parse_enum(&parsers, &mut lexer)?);
             }
-            Token::Identifier(i) if i == "interface" => {}
-            Token::Identifier(i) if i == "behavior" => {}
+            Token::Identifier(i) if i == "interface" => {
+                lexer.eat();
+                res.interfaces.push(parse_interface(&parsers, &mut lexer)?);
+            }
+            Token::Identifier(i) if i == "behavior" => {
+                lexer.eat();
+                res.behaviors.push(parse_behavior(&parsers, &mut lexer)?);
+            }
             Token::Identifier(i) if i == "fn" => {
                 lexer.eat();
                 res.funcs.push(parse_func_def(&parsers, &mut lexer)?);
@@ -67,7 +69,11 @@ pub fn parse(script: String) -> Result<Script, CompileErr> {
                 lexer.eat();
                 res.externs.push(parse_func_decl(&parsers, &mut lexer)?);
             }
-            _ => return Err(CompileErr::Message("Expected valid top-level definition")),
+            _ => {
+                return Err(CompileErr::DynMessage(format!(
+                    "Expected valid top-level definition but saw {tok}"
+                )))
+            }
         }
     }
     Ok(res)
@@ -82,7 +88,13 @@ fn build_shared_parsers() -> SharedParsers {
         block_pexpr: Rc::new(gen_block_pexpr_parser()),
         pexpr_optree: Rc::new(gen_pexpr_optree_parser()),
         pexpr_value: Rc::new(gen_pexpr_value_parser()),
+        bexpr: Rc::new(gen_bexpr_parser()),
+        bexpr_value: Rc::new(gen_bexpr_value_parser()),
     }
+}
+
+fn ll1_always(_: &SharedParsers, _: &mut Lex) -> Result<bool, CompileErr> {
+    Ok(true)
 }
 
 fn gen_enum_expr_parser() -> impl Parser<u64, SharedParsers> {
@@ -117,7 +129,7 @@ fn gen_enum_expr_parser() -> impl Parser<u64, SharedParsers> {
                             pfx(
                                 &[Token::Dash, Token::Tilde],
                                 eval_unop,
-                                (extint(), wrparen(inv(ll1_enum_expr, parse_enum_expr))).oneof(),
+                                oneof((extint(), wrparen(inv(ll1_enum_expr, parse_enum_expr)))),
                             ),
                             &[Token::Asterisk, Token::FSlash, Token::Percent],
                             eval_binop,
@@ -224,25 +236,23 @@ fn gen_fulltype_parser() -> impl Parser<FullType, SharedParsers> {
         }
     };
     let kind_parse = rep(seqlr(
-        (
-            cvt(|_| TypeKind::List, mat_val(mkident("list"))),
-            cvt(|_| TypeKind::Maybe, mat_val(mkident("maybe"))),
-            cvt(|_| TypeKind::View, mat_val(mkident("view"))),
-        )
-            .oneof(),
+        oneof((
+            cvt(|_| TypeKind::List, mat_id("list")),
+            cvt(|_| TypeKind::Maybe, mat_id("maybe")),
+            cvt(|_| TypeKind::View, mat_id("view")),
+        )),
         cvt(|m| m.is_some(), flagged(Token::Ampersand, epsilon())),
     ));
 
     let base_parse = seqlr(
-        (
+        oneof((
             // TODO: check for errors if basetype overlaps with keywords
             cvt(basetype_id, extid()),
             cvt(
                 BaseType::Callable,
                 wrparen(icl(inv(ll1_fulltype, parse_fulltype), Token::Arrow)),
             ),
-        )
-            .oneof(),
+        )),
         cvt(|m| m.is_some(), flagged(Token::Ampersand, epsilon())),
     );
 
@@ -305,17 +315,14 @@ fn gen_noblock_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
             ))
         },
         seqlr(
-            seqr(mat_val(mkident("guard")), inv(ll1_pexpr, parse_pexpr)),
+            seqr(mat_id("guard"), inv(ll1_pexpr, parse_pexpr)),
             flagged(Token::Arrow, inv(ll1_pexpr, parse_pexpr)),
         ),
     ));
 
-    let brk = withannot(cvt(|_| Box::new(PExpr::Break), mat_val(mkident("break"))));
+    let brk = withannot(cvt(|_| Box::new(PExpr::Break), mat_id("break")));
 
-    let cont = withannot(cvt(
-        |_| Box::new(PExpr::Continue),
-        mat_val(mkident("continue")),
-    ));
+    let cont = withannot(cvt(|_| Box::new(PExpr::Continue), mat_id("continue")));
 
     let ret = withannot(cvt(
         |mexpr| {
@@ -323,11 +330,11 @@ fn gen_noblock_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
                 mexpr.unwrap_or_else(|| annot_nil(Box::new(VOIDEXPR))),
             ))
         },
-        seqr(mat_val(mkident("return")), maybeinv(ll1_pexpr, parse_pexpr)),
+        seqr(mat_id("return"), maybeinv(ll1_pexpr, parse_pexpr)),
     ));
 
     let op_tree = inv(ll1_pexpr_optree, parse_pexpr_optree);
-    (guard, brk, cont, ret, op_tree).oneof()
+    oneof((guard, brk, cont, ret, op_tree))
 }
 mk_invoke_pair!(noblock_pexpr ll1_noblock_pexpr parse_noblock_pexpr AnnotPExpr);
 
@@ -348,7 +355,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
         },
         withannot(seqlr(
             seqr(
-                mat_val(mkident("if")),
+                mat_id("if"),
                 seqlr(inv(ll1_pexpr, parse_pexpr), inv(ll1_pblock, parse_pblock)),
             ),
             flagged(mkident("else"), inv(ll1_pblock, parse_pblock)),
@@ -358,7 +365,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
     let while_e = cvt(
         |ann| annot(ann.loc, Box::new(PExpr::While(ann.inner.0, ann.inner.1))),
         withannot(seqlr(
-            seqr(mat_val(mkident("if")), inv(ll1_pexpr, parse_pexpr)),
+            seqr(mat_id("if"), inv(ll1_pexpr, parse_pexpr)),
             inv(ll1_pblock, parse_pblock),
         )),
     );
@@ -372,7 +379,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
         },
         withannot(seqlr(
             seqlr(
-                seqr(mat_val(mkident("for")), withannot(extid())),
+                seqr(mat_id("for"), withannot(extid())),
                 inv(ll1_pexpr, parse_pexpr),
             ),
             inv(ll1_pblock, parse_pblock),
@@ -382,7 +389,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
     let mat_e = cvt(
         |ann| annot(ann.loc, Box::new(PExpr::Match(ann.inner.0, ann.inner.1))),
         withannot(seqlr(
-            seqr(mat_val(mkident("match")), inv(ll1_pexpr, parse_pexpr)),
+            seqr(mat_id("match"), inv(ll1_pexpr, parse_pexpr)),
             wrcurly(rep(seqlr(
                 inv(ll1_pexpr, parse_pexpr),
                 seqr(
@@ -396,7 +403,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
     let case_e = cvt(
         |ann| annot(ann.loc, Box::new(PExpr::Case(ann.inner))),
         withannot(seqr(
-            mat_val(mkident("case")),
+            mat_id("case"),
             wrcurly(rep(seqlr(
                 inv(ll1_pexpr, parse_pexpr),
                 seqr(
@@ -407,7 +414,7 @@ fn gen_block_pexpr_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
         )),
     );
 
-    (if_e, while_e, for_e, mat_e, case_e).oneof()
+    oneof((if_e, while_e, for_e, mat_e, case_e))
 }
 mk_invoke_pair!(block_pexpr ll1_block_pexpr parse_block_pexpr AnnotPExpr);
 
@@ -453,12 +460,12 @@ fn gen_pexpr_optree_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
             )
         };
 
-        let base_expr = (
+        let base_expr = oneof((
             wrparen(inv(ll1_pexpr, parse_pexpr)),
-            inv(ll1_pexpr_value, parse_pexpr_value),
+            // TODO: Ordering here is very important until keyword filtering is completed
             inv(ll1_block_pexpr, parse_block_pexpr),
-        )
-            .oneof();
+            inv(ll1_pexpr_value, parse_pexpr_value),
+        ));
 
         let memacc = withannot(seqr(
             mat_tp(TokenDiscriminants::Period),
@@ -494,7 +501,7 @@ fn gen_pexpr_optree_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
             seqlr(
                 base_expr,
                 // Wish to do with an infix, but array subscript isn't infix
-                rep((memacc, arrsub, fncall).oneof()),
+                rep(oneof((memacc, arrsub, fncall))),
             ),
         );
 
@@ -575,7 +582,7 @@ fn gen_pexpr_optree_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
     };
 
     type TD = TokenDiscriminants;
-    let assn_ops = (
+    let assn_ops = oneof((
         mat_tp(TD::Equal),
         mat_tp(TD::PlusEqual),
         mat_tp(TD::DashEqual),
@@ -587,8 +594,8 @@ fn gen_pexpr_optree_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
         mat_tp(TD::TildeEqual),
         mat_tp(TD::LLAngleEqual),
         mat_tp(TD::RRAngleEqual),
-    )
-        .oneof();
+    ));
+
     cvt(
         |(lhs, mrhs)| {
             if let Some((op, rhs)) = mrhs {
@@ -620,22 +627,18 @@ mk_invoke_pair!(pexpr_optree ll1_pexpr_optree parse_pexpr_optree AnnotPExpr);
 
 fn gen_pexpr_value_parser() -> impl Parser<AnnotPExpr, SharedParsers> {
     // TODO: exclude keyword identifiers (e.g. true, false, if, else, etc...)
-    withannot(
-        (
-            cvt(|id| Box::new(PExpr::Ident(id)), extid()),
-            cvt(
-                |lit| Box::new(PExpr::Lit(lit)),
-                (
-                    cvt(Literal::Integral, extint()),
-                    cvt(Literal::Flt, extflt()),
-                    cvt(Literal::Dbl, extdbl()),
-                    cvt(Literal::Str, extstr()),
-                )
-                    .oneof(),
-            ),
-        )
-            .oneof(),
-    )
+    withannot(oneof((
+        cvt(|id| Box::new(PExpr::Ident(id)), extid()),
+        cvt(
+            |lit| Box::new(PExpr::Lit(lit)),
+            oneof((
+                cvt(Literal::Integral, extint()),
+                cvt(Literal::Flt, extflt()),
+                cvt(Literal::Dbl, extdbl()),
+                cvt(Literal::Str, extstr()),
+            )),
+        ),
+    )))
 }
 mk_invoke_pair!(pexpr_value ll1_pexpr_value parse_pexpr_value AnnotPExpr);
 
@@ -665,7 +668,7 @@ fn parse_pblock(pt: &SharedParsers, lexer: &mut Lex) -> Result<AnnotPExpr, Compi
                 cvt(
                     |(name, tp)| Var { name, tp },
                     seqlr(
-                        seqr(mat_val(mkident("var")), withannot(extid())),
+                        seqr(mat_id("var"), withannot(extid())),
                         seqr(
                             mat_tp(TokenDiscriminants::Colon),
                             withannot(inv(ll1_fulltype, parse_fulltype)),
@@ -674,11 +677,10 @@ fn parse_pblock(pt: &SharedParsers, lexer: &mut Lex) -> Result<AnnotPExpr, Compi
                 ),
                 seqr(
                     mat_tp(TokenDiscriminants::Equal),
-                    (
+                    oneof((
                         inv(ll1_noblock_pexpr, parse_noblock_pexpr),
                         inv(ll1_block_pexpr, parse_block_pexpr),
-                    )
-                        .oneof(),
+                    )),
                 ),
             ),
             mat_tp(TokenDiscriminants::Semicolon),
@@ -700,11 +702,9 @@ fn parse_pblock(pt: &SharedParsers, lexer: &mut Lex) -> Result<AnnotPExpr, Compi
     loop {
         if var_decl.ll1(pt, lexer)? {
             seq_vec.push(var_decl.parse(pt, lexer)?);
-        }
-        if semi.ll1(pt, lexer)? {
+        } else if semi.ll1(pt, lexer)? {
             seq_vec.push(semi.parse(pt, lexer)?);
-        }
-        if ll1_noblock_pexpr(pt, lexer)? {
+        } else if ll1_noblock_pexpr(pt, lexer)? {
             let result = parse_noblock_pexpr(pt, lexer)?;
             if semi.ll1(pt, lexer)? {
                 seq_vec.push(result);
@@ -715,8 +715,7 @@ fn parse_pblock(pt: &SharedParsers, lexer: &mut Lex) -> Result<AnnotPExpr, Compi
                 // end of the block (RCurly)
                 break;
             }
-        }
-        if ll1_block_pexpr(pt, lexer)? {
+        } else if ll1_block_pexpr(pt, lexer)? {
             let result = parse_block_pexpr(pt, lexer)?;
             if rcurly.ll1(pt, lexer)? {
                 res_expr = Some(result);
@@ -754,6 +753,281 @@ fn parse_func_def(pt: &SharedParsers, lexer: &mut Lex) -> Result<FuncDef, Compil
     let body = parse_pblock(pt, lexer)?;
 
     Ok(FuncDef {
+        name,
+        params,
+        rtp,
+        body,
+    })
+}
+
+fn parse_interface(pt: &SharedParsers, lexer: &mut Lex) -> Result<InterfaceDef, CompileErr> {
+    let (name, inherit) = seqlr(
+        withannot(extid()),
+        flagged(Token::Colon, withannot(extid())),
+    )
+    .parse(pt, lexer)?;
+
+    let ivar = cvt(
+        |(name, (tp, off))| IVarDef { name, tp, off },
+        seqlr(
+            seqr(mat_id("var"), withannot(extid())),
+            seqlr(
+                seqr(
+                    mat_tp(TokenDiscriminants::Colon),
+                    withannot(inv(ll1_fulltype, parse_fulltype)),
+                ),
+                seqr(
+                    mat_tp(TokenDiscriminants::Ampersat),
+                    seql(withannot(extint()), mat_tp(TokenDiscriminants::Semicolon)),
+                ),
+            ),
+        ),
+    );
+
+    let fndef = seqr(mat_id("fn"), inv(ll1_always, parse_func_def));
+
+    let mut func_list: Vec<FuncDef> = Vec::new();
+    let mut var_list: Vec<IVarDef> = Vec::new();
+
+    mat_tp(TokenDiscriminants::LCurly).parse(pt, lexer)?;
+    loop {
+        if fndef.ll1(pt, lexer)? {
+            func_list.push(fndef.parse(pt, lexer)?);
+        } else if ivar.ll1(pt, lexer)? {
+            var_list.push(ivar.parse(pt, lexer)?);
+        } else {
+            break;
+        }
+    }
+    mat_tp(TokenDiscriminants::RCurly).parse(pt, lexer)?;
+
+    Ok(InterfaceDef {
+        name,
+        inherit,
+        func_list,
+        var_list,
+    })
+}
+
+fn gen_bexpr_value_parser() -> impl Parser<AnnotBExpr, SharedParsers> {
+    // TODO: exclude keyword identifiers (e.g. true, false, if, else, etc...)
+    withannot(oneof((
+        cvt(|id| Box::new(BExpr::Ident(id)), extid()),
+        cvt(
+            |lit| Box::new(BExpr::Lit(lit)),
+            oneof((
+                cvt(Literal::Integral, extint()),
+                cvt(Literal::Flt, extflt()),
+                cvt(Literal::Dbl, extdbl()),
+                cvt(Literal::Str, extstr()),
+            )),
+        ),
+    )))
+}
+mk_invoke_pair!(bexpr_value ll1_bexpr_value parse_bexpr_value AnnotBExpr);
+
+// TODO: A lot of this is shared with PExpr, perhaps refactor?
+fn gen_bexpr_parser() -> impl Parser<AnnotBExpr, SharedParsers> {
+    let combine_infix: fn(AnnotBExpr, Token, AnnotBExpr) -> AnnotBExpr =
+        |lhs, op, rhs| -> AnnotBExpr {
+            annot(
+                lhs.loc.to_right(&rhs.loc),
+                Box::new(match op {
+                    Token::DoublePipe => BExpr::Binary(lhs, BinaryOp::Or, rhs),
+                    Token::DoubleAmpersand => BExpr::Binary(lhs, BinaryOp::And, rhs),
+                    Token::Pipe => BExpr::Binary(lhs, BinaryOp::BOr, rhs),
+                    Token::Caret => BExpr::Binary(lhs, BinaryOp::BXor, rhs),
+                    Token::Ampersand => BExpr::Binary(lhs, BinaryOp::BAnd, rhs),
+                    Token::DoubleEqual => BExpr::Binary(lhs, BinaryOp::CmpEq, rhs),
+                    Token::BangEqual => BExpr::Binary(lhs, BinaryOp::CmpNe, rhs),
+                    Token::RAngle => BExpr::Binary(lhs, BinaryOp::CmpGt, rhs),
+                    Token::LAngle => BExpr::Binary(lhs, BinaryOp::CmpLt, rhs),
+                    Token::RAngleEqual => BExpr::Binary(lhs, BinaryOp::CmpGe, rhs),
+                    Token::LAngleEqual => BExpr::Binary(lhs, BinaryOp::CmpLe, rhs),
+                    Token::RRAngle => BExpr::Binary(lhs, BinaryOp::Rsh, rhs),
+                    Token::LLAngle => BExpr::Binary(lhs, BinaryOp::Lsh, rhs),
+                    Token::Plus => BExpr::Binary(lhs, BinaryOp::Add, rhs),
+                    Token::Dash => BExpr::Binary(lhs, BinaryOp::Sub, rhs),
+                    Token::Asterisk => BExpr::Binary(lhs, BinaryOp::Mul, rhs),
+                    Token::FSlash => BExpr::Binary(lhs, BinaryOp::Div, rhs),
+                    Token::Percent => BExpr::Binary(lhs, BinaryOp::Mod, rhs),
+                    _ => panic!("Invalid infix operation for procedural expression"),
+                }),
+            )
+        };
+
+    let combine_prefix: fn(Token, AnnotBExpr) -> AnnotBExpr = |op, sub| -> AnnotBExpr {
+        annot(
+            // TODO: Correct annotation
+            sub.loc,
+            Box::new(match op {
+                Token::Dash => BExpr::Unary(UnaryOp::Neg, sub),
+                Token::Tilde => BExpr::Unary(UnaryOp::BNot, sub),
+                Token::Bang => BExpr::Unary(UnaryOp::Not, sub),
+                _ => panic!("Invalid prefix operation for procedural expression"),
+            }),
+        )
+    };
+
+    let base_expr = oneof((
+        inv(ll1_bexpr_value, parse_bexpr_value),
+        wrparen(oneof((
+            withannot(seqr(
+                mat_tp(TokenDiscriminants::Hash),
+                cvt(
+                    |(id, params)| Box::new(BExpr::Call(id, params)),
+                    seqlr(
+                        withannot(extid()),
+                        icl(inv(ll1_bexpr, parse_bexpr), Token::Comma),
+                    ),
+                ),
+            )),
+            withannot(seqr(
+                mat_tp(TokenDiscriminants::Ampersat),
+                cvt(
+                    |(id, params)| Box::new(BExpr::Curry(id, params)),
+                    seqlr(
+                        withannot(extid()),
+                        icl(inv(ll1_bexpr, parse_bexpr), Token::Comma),
+                    ),
+                ),
+            )),
+            inv(ll1_bexpr, parse_bexpr),
+        ))),
+    ));
+
+    let memacc = withannot(seqr(
+        mat_tp(TokenDiscriminants::Period),
+        cvt(
+            |id| BExpr::MemAcc(annot_nil(Box::new(BExpr::Nil)), id),
+            withannot(extid()),
+        ),
+    ));
+    let arrsub = withannot(wrbracket(cvt(
+        |idx_expr| BExpr::Subscr(annot_nil(Box::new(BExpr::Nil)), idx_expr),
+        inv(ll1_bexpr, parse_bexpr),
+    )));
+    let indir = cvt(
+        |(base_expr, indir_nodes)| {
+            let mut ret = base_expr;
+            for indir in indir_nodes {
+                ret = annot(
+                    ret.loc.to_right(&indir.loc),
+                    Box::new(match indir.inner {
+                        BExpr::MemAcc(_, ident) => BExpr::MemAcc(ret, ident),
+                        BExpr::Subscr(_, idx) => BExpr::Subscr(ret, idx),
+                        _ => panic!("LValue parse has invalid indirection list"),
+                    }),
+                );
+            }
+            ret
+        },
+        seqlr(
+            base_expr,
+            // Wish to do with an infix, but array subscript isn't infix
+            rep(oneof((memacc, arrsub))),
+        ),
+    );
+
+    let p0 = pfx(
+        &[Token::Dash, Token::Tilde, Token::Bang],
+        combine_prefix,
+        cvt(
+            |(bexpr, mconv)| {
+                if let Some(tp) = mconv {
+                    annot(
+                        bexpr.loc.to_right(&tp.loc),
+                        Box::new(BExpr::Cast(bexpr, tp)),
+                    )
+                } else {
+                    bexpr
+                }
+            },
+            seqlr(
+                indir,
+                flagged(Token::Colon, withannot(inv(ll1_fulltype, parse_fulltype))),
+            ),
+        ),
+    );
+
+    let i5_10 = ifx(
+        ifx(
+            ifx(
+                ifx(
+                    ifx(
+                        ifx(
+                            p0,
+                            &[Token::Asterisk, Token::FSlash, Token::Percent],
+                            combine_infix,
+                        ),
+                        &[Token::Plus, Token::Dash],
+                        combine_infix,
+                    ),
+                    &[Token::RRAngle, Token::LLAngle],
+                    combine_infix,
+                ),
+                &[
+                    Token::RAngle,
+                    Token::LAngle,
+                    Token::RAngleEqual,
+                    Token::LAngleEqual,
+                ],
+                combine_infix,
+            ),
+            &[
+                Token::RAngle,
+                Token::LAngle,
+                Token::RAngleEqual,
+                Token::LAngleEqual,
+            ],
+            combine_infix,
+        ),
+        &[Token::DoubleEqual, Token::BangEqual],
+        combine_infix,
+    );
+
+    ifx(
+        ifx(
+            ifx(
+                ifx(
+                    ifx(i5_10, &[Token::Ampersand], combine_infix),
+                    &[Token::Caret],
+                    combine_infix,
+                ),
+                &[Token::Pipe],
+                combine_infix,
+            ),
+            &[Token::DoubleAmpersand],
+            combine_infix,
+        ),
+        &[Token::DoublePipe],
+        combine_infix,
+    )
+}
+mk_invoke_pair!(bexpr ll1_bexpr parse_bexpr AnnotBExpr);
+
+fn parse_behavior(pt: &SharedParsers, lexer: &mut Lex) -> Result<BehaviorDef, CompileErr> {
+    let (name, params) = wrcurly(seqlr(
+        withannot(extid()),
+        inv(ll1_param_list, parse_param_list),
+    ))
+    .parse(pt, lexer)?;
+
+    let rtp = FullType {
+        kind: Vec::new(),
+        base: (BaseType::Void, false),
+    };
+
+    let body = seql(
+        seqr(
+            mat_tp(TokenDiscriminants::Equal),
+            inv(ll1_bexpr, parse_bexpr),
+        ),
+        mat_tp(TokenDiscriminants::Semicolon),
+    )
+    .parse(pt, lexer)?;
+
+    Ok(BehaviorDef {
         name,
         params,
         rtp,
@@ -888,7 +1162,6 @@ mod tests {
 func(x: i32, y: i32) -> maybe i32 {
     var a: maybe view i32 = mkmaybe(mkview(1 + 6));
     a[1 + a](3, 6) = 3 | 6 + 1
-
 }",
             )),
         )
@@ -937,5 +1210,33 @@ enum0 {
                 ],
             },
         );
+    }
+
+    #[test]
+    fn test_all() {
+        let script = parse(String::from(
+            r#"
+import "import_test.bot";
+
+fn test_func(p0: maybe i32, p1_f: (i8 -> i16 -> (i32)), p2: maybe& CustomType) -> maybe i32 {
+    var v: i32 = p1_f(p0, 2)();
+    var v2: i32 = match i + 1 {
+        10 -> {
+            "string1"
+        }
+        20 -> {
+            "string2"
+        }
+        test_func(3) -> {
+            var v3: float = 5 + (3.2f + 5);
+            "string3"
+        }
+    };
+    some(v + v2)
+}
+"#,
+        ))
+        .expect("Failed parse");
+        println!("{script}");
     }
 }
