@@ -593,7 +593,7 @@ pub struct FuncDef {
 
 impl fmt::Display for FuncDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Function name: {}\n", self.name)?;
+        writeln!(f, "Function name: {}", self.name)?;
         for (idx, p) in self.params.iter().enumerate() {
             writeln!(f, "\tParameter {idx} = {p}")?;
         }
@@ -716,7 +716,7 @@ pub struct FuncDecl {
 
 impl fmt::Display for FuncDecl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Extern function name: {}\n", self.name)?;
+        writeln!(f, "Extern function name: {}", self.name)?;
         for (idx, p) in self.params.iter().enumerate() {
             writeln!(f, "\tParameter {idx} = {p}")?;
         }

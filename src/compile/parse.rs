@@ -1,7 +1,7 @@
 use crate::compile::ast::*;
 use crate::compile::lex::{mkident, Lex, Token, TokenDiscriminants};
 use crate::compile::parsec::{
-    log, cvt, cvt_witherr, epsilon, extdbl, extflt, extid, extint, extstr, flagged, icl, ifx, inv,
+    cvt, cvt_witherr, epsilon, extdbl, extflt, extid, extint, extstr, flagged, icl, ifx, inv, log,
     mat_id, mat_tp, maybeinv, maybeseqlr, oneof, pfx, rep, seql, seqlr, seqr, withannot, wrbracket,
     wrcurly, wrparen, Parser,
 };
@@ -297,9 +297,12 @@ fn parse_func_decl(pt: &SharedParsers, lexer: &mut Lex) -> Result<FuncDecl, Comp
     )
     .parse(pt, lexer)?;
 
-    let rtp = seqr(
-        mat_tp(TokenDiscriminants::Arrow),
-        withannot(inv(ll1_fulltype, parse_fulltype)),
+    let rtp = seql(
+        seqr(
+            mat_tp(TokenDiscriminants::Arrow),
+            withannot(inv(ll1_fulltype, parse_fulltype)),
+        ),
+        mat_tp(TokenDiscriminants::Semicolon),
     )
     .parse(pt, lexer)?;
 
@@ -1007,7 +1010,7 @@ fn gen_bexpr_parser() -> impl Parser<AnnotBExpr, SharedParsers> {
 mk_invoke_pair!(bexpr ll1_bexpr parse_bexpr AnnotBExpr);
 
 fn parse_behavior(pt: &SharedParsers, lexer: &mut Lex) -> Result<BehaviorDef, CompileErr> {
-    let (name, params) = wrcurly(seqlr(
+    let (name, params) = wrparen(seqlr(
         withannot(extid()),
         inv(ll1_param_list, parse_param_list),
     ))
@@ -1234,6 +1237,18 @@ fn test_func(p0: maybe i32, p1_f: (i8 -> i16 -> (i32)), p2: maybe& CustomType) -
     };
     some(v + v2)
 }
+
+behavior (test_behavior x: float, y: float, z: float) = (#if x < 1, y + z, x + y + z);
+
+interface TestInterface : BaseClass {
+    fn ifunc1() -> bool {
+        ivar
+    }
+
+    var ivar: bool @ 0x20;
+}
+
+extern efunc(p0: i32) -> bool;
 "#,
         ))
         .expect("Failed parse");
